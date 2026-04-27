@@ -1053,7 +1053,10 @@ var LOGO_URL = "";
 // ===== STORAGE =====
 var LS = {
   get: function(k) { try{ return JSON.parse(localStorage.getItem('ac_'+k)); }catch(e){ return null; } },
-  set: function(k,v) { localStorage.setItem('ac_'+k,JSON.stringify(v)); schedSync(); },
+  // set = local only (no Firebase). Use sync() for intentional saves.
+  set: function(k,v) { localStorage.setItem('ac_'+k,JSON.stringify(v)); },
+  // sync = local + Firebase push (only on real Save/Delete actions)
+  sync: function(k,v) { localStorage.setItem('ac_'+k,JSON.stringify(v)); pushCloud(); },
   setL: function(k,v) { localStorage.setItem('ac_'+k,JSON.stringify(v)); },
   del: function(k) { localStorage.removeItem('ac_'+k); }
 };
@@ -1088,10 +1091,8 @@ function getSyncPath(){
 }
 
 function schedSync(){
-  if(!SYNC_KEY || !getFirebaseUrl()) return;
-  clearTimeout(syncTmr);
-  // Instant sync - 500ms debounce to batch rapid changes
-  syncTmr = setTimeout(pushCloud, 500);
+  // Deprecated - Firebase now only pushes on explicit Save/Delete actions
+  // This prevents Firebase limit hits from UI interactions
 }
 
 async function pushCloud(){
@@ -1155,9 +1156,9 @@ async function pullCloud(){
         lastSync = Date.now();
         updSS();
         showToast('Synced! ' + invoices.length + ' invoices loaded');
-      // Refresh invoice number after sync so next invoice uses correct number
-      var invNoEl = document.getElementById('invNo');
-      if(invNoEl && currentPage === 'invoice') invNoEl.value = genInvNo();
+        // Refresh invoice number after sync - always derived from real invoices data
+        var invNoEl = document.getElementById('invNo');
+        if(invNoEl && currentPage === 'invoice') invNoEl.value = genInvNo();
         renderDashboard();
       } else if(d === null){
         // No data on Firebase yet - push local data
@@ -1627,7 +1628,7 @@ function changePassword(){
 
 function saveSettings(){
   SETTINGS = {biz:document.getElementById('set-biz').value, ph:document.getElementById('set-ph').value, addr:document.getElementById('set-addr').value, gst:document.getElementById('set-gst').value};
-  LS.set('settings', SETTINGS);
+  LS.sync('settings', SETTINGS);
   showToast('Settings saved');
 }
 
@@ -1708,24 +1709,22 @@ function monthKey(d){
   return dt.toLocaleString('en-IN', {month:'short', year:'numeric'});
 }
 function genInvNo(){
+  // Invoice number STRICTLY derived from saved invoices array only.
+  // This array is Firebase-synced so all devices see the same counter.
+  // Number never changes unless a real invoice is saved to history.
   var d = new Date();
   var mon = d.toLocaleString('en-IN',{month:'short'}).toUpperCase().slice(0,3);
   var yr = String(d.getFullYear()).slice(-2);
   var prefix = 'AC/' + mon + yr + '/';
-  // Find highest invoice number this month to avoid duplicates across devices
   var maxNum = 0;
   invoices.forEach(function(i){
     if(i.invNo && i.invNo.indexOf(prefix) === 0){
-      var numPart = parseInt(i.invNo.replace(prefix,''))||0;
+      var numPart = parseInt(i.invNo.replace(prefix,'')) || 0;
       if(numPart > maxNum) maxNum = numPart;
     }
   });
-  // Also check locally stored last number
-  var storedMax = parseInt(localStorage.getItem('ac_lastInvNum_'+mon+yr)||'0');
-  if(storedMax > maxNum) maxNum = storedMax;
-  var nextNum = maxNum + 1;
-  localStorage.setItem('ac_lastInvNum_'+mon+yr, String(nextNum));
-  return prefix + String(nextNum).padStart(3,'0');
+  // NO localStorage counter - counter only moves when invoice is actually saved
+  return prefix + String(maxNum + 1).padStart(3,'0');
 }
 function escH(s){ return (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function toggleFolder(id){
@@ -1746,7 +1745,7 @@ function saveCustomer(name, phone, addr){
   } else {
     savedCustomers.unshift({id:Date.now(), name:name, phone:phone||'', addr:addr||'', createdAt:new Date().toISOString()});
   }
-  LS.set('customers', savedCustomers);
+  LS.sync('customers', savedCustomers);
 }
 
 function searchCust(val){
@@ -1783,9 +1782,8 @@ function pickCust(el){
 // ===== INVOICE =====
 function initInvoice(){
   document.getElementById('invDate').value = nowDate();
-  var storedNext = localStorage.getItem('ac_nextInvNo');
-  document.getElementById('invNo').value = storedNext || genInvNo();
-  if(storedNext) localStorage.removeItem('ac_nextInvNo');
+  // Invoice number always freshly derived from synced invoices array
+  document.getElementById('invNo').value = genInvNo();
   document.getElementById('discount').value = 0;
   ['custName','custPhone','custAddr','invNote'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
   var pm=document.getElementById('invPayMode'); if(pm) pm.value='Cash';
@@ -2024,15 +2022,8 @@ function previewAndSave(){
   }, 400);
 }
 function prepareNextInvoice(savedInv){
-  var parts = (savedInv.invNo||'').split('/');
-  if(parts.length === 3){
-    var mon = parts[1].slice(0,3);
-    var yr = parts[1].slice(3);
-    var num = parseInt(parts[2])||0;
-    // Update stored max so all devices know highest number used
-    var storedMax = parseInt(localStorage.getItem('ac_lastInvNum_'+mon+yr)||'0');
-    if(num > storedMax) localStorage.setItem('ac_lastInvNum_'+mon+yr, String(num));
-  }
+  // Invoice number is now derived purely from invoices array (Firebase-synced).
+  // No localStorage counter needed - next number auto-updates after sync.
 }
 
 function collectInvoice(){
@@ -2061,13 +2052,13 @@ function collectInvoice(){
   var inv = {id:Date.now(), invNo:document.getElementById('invNo').value||genInvNo(), invDate:document.getElementById('invDate').value||nowDate(), custName:custName, custPhone:document.getElementById('custPhone').value, custAddr:document.getElementById('custAddr').value, payMode:pm, payStatus:ps, cashAmt:cashAmt, upiAmt:upiAmt, note:document.getElementById('invNote').value||'Thank you for shopping!', items:validItems.slice(), sub:sub, disc:disc, gstByRate:gstByRate, totalGst:totalGstAmt, gstType:gstType, total:total, savedAt:new Date().toISOString()};
   var existing = invoices.findIndex(function(i){ return i.invNo===inv.invNo; });
   if(existing>=0) invoices[existing]=inv; else invoices.unshift(inv);
-  LS.set('invoices', invoices);
+  LS.sync('invoices', invoices);
   saveCustomer(inv.custName, inv.custPhone, inv.custAddr);
   validItems.forEach(function(item){
     var si = stockItems.find(function(s){ return s.name.toLowerCase()===item.name.toLowerCase(); });
     if(si) si.qty = Math.max(0, si.qty-item.qty);
   });
-  LS.set('stock', stockItems);
+  LS.sync('stock', stockItems);
   checkDateChange();
   return inv;
 }
@@ -2253,7 +2244,7 @@ function renderHistory(){
 }
 
 function viewInv(id){ var inv=invoices.find(function(i){return i.id===id;}); if(!inv)return; currentInv=inv; buildPreview(inv); navTo('preview',null); }
-function deleteInv(id){ if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete invoices');return;} if(!confirm('Delete?'))return; invoices=invoices.filter(function(i){return i.id!==id;}); LS.set('invoices',invoices); renderHistory(); showToast('Deleted'); }
+function deleteInv(id){ if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete invoices');return;} if(!confirm('Delete?'))return; invoices=invoices.filter(function(i){return i.id!==id;}); LS.sync('invoices',invoices); renderHistory(); showToast('Deleted'); }
 function shareWAById(id){ var inv=invoices.find(function(i){return i.id===id;}); if(inv)shareWA(inv); }
 function downloadInvPDFById(id){ var inv=invoices.find(function(i){return i.id===id;}); if(!inv){showToast('Invoice not found');return;} currentInv=inv; buildPreview(inv); setTimeout(function(){ downloadPDF(); }, 400); }
 
@@ -2419,12 +2410,12 @@ function addStock(){
   var existing=stockItems.find(function(s){return s.name.toLowerCase()===name.toLowerCase()&&s.size===size;});
   if(existing){
     existing.qty+=qty; if(cost>0)existing.cost=cost; if(mrp>0)existing.mrp=mrp;
-    LS.set('stock',stockItems);
+    LS.sync('stock',stockItems);
     document.getElementById('inv-name').value=''; document.getElementById('inv-qty').value='10';
     renderInventory(); showToast('Qty updated! Total: '+existing.qty+' pcs'); return;
   }
   stockItems.unshift({id:Date.now(),name:name,category:cat,size:size,qty:qty,cost:cost,mrp:mrp,addedOn:nowDate()});
-  LS.set('stock',stockItems);
+  LS.sync('stock',stockItems);
   document.getElementById('inv-name').value=''; document.getElementById('inv-qty').value='10';
   renderInventory(); showToast('Stock added!');
 }
@@ -2450,12 +2441,12 @@ function saveEditStock(){
   item.qty=parseInt(document.getElementById('edit-qty').value)||0;
   item.cost=parseFloat(document.getElementById('edit-cost').value)||0;
   item.mrp=parseFloat(document.getElementById('edit-mrp').value)||0;
-  LS.set('stock',stockItems); closeEditModal(); renderInventory(); showToast('Updated!');
+  LS.sync('stock',stockItems); closeEditModal(); renderInventory(); showToast('Updated!');
 }
 
 function closeEditModal(){ editingStockId=null; document.getElementById('editStockModal').classList.remove('show'); }
-function updateQty(id,delta){var item=stockItems.find(function(i){return i.id===id;});if(!item)return;item.qty=Math.max(0,item.qty+delta);LS.set('stock',stockItems);renderInventory();}
-function delStock(id){if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete stock');return;}if(!confirm('Delete?'))return;stockItems=stockItems.filter(function(i){return i.id!==id;});LS.set('stock',stockItems);renderInventory();showToast('Deleted');}
+function updateQty(id,delta){var item=stockItems.find(function(i){return i.id===id;});if(!item)return;item.qty=Math.max(0,item.qty+delta);LS.sync('stock',stockItems);renderInventory();}
+function delStock(id){if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete stock');return;}if(!confirm('Delete?'))return;stockItems=stockItems.filter(function(i){return i.id!==id;});LS.sync('stock',stockItems);renderInventory();showToast('Deleted');}
 function buildCatOptions(sel){return CATEGORIES.map(function(c){return '<option value="'+c+'" '+(c===sel?'selected':'')+'>'+c+'</option>';}).join('');}
 function buildSizeOptions(sel){return SIZES.map(function(s){return '<option value="'+s+'" '+(s===sel?'selected':'')+'>'+s+'</option>';}).join('');}
 
@@ -3180,7 +3171,7 @@ function savePendingPayment(){
     } else {
       inv.payStatus = 'Partial';
     }
-    LS.set('invoices', invoices);
+    LS.sync('invoices', invoices);
   }
 
   // Create payment receipt
@@ -3201,7 +3192,7 @@ function savePendingPayment(){
     savedAt: new Date().toISOString()
   };
   pendingPayments.unshift(receipt);
-  LS.set('pendingPayments', pendingPayments);
+  LS.sync('pendingPayments', pendingPayments);
 
   // Build and show receipt preview
   currentPendingReceipt = receipt;
@@ -3423,7 +3414,7 @@ function deleteReceipt(id){
   if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete receipts');return;}
   if(!confirm('Delete receipt?')) return;
   pendingPayments=pendingPayments.filter(function(p){return p.id!==id;});
-  LS.set('pendingPayments',pendingPayments);
+  LS.sync('pendingPayments',pendingPayments);
   renderPendingReceipts();
   showToast('Deleted');
 }
@@ -3500,11 +3491,11 @@ function editReceipt(id){
     inv.paidAmount = Math.max(0, (inv.paidAmount||0) - r.paidAmt);
     var remaining = inv.total - inv.paidAmount;
     inv.payStatus = inv.paidAmount <= 0 ? 'Pending' : (remaining <= 0 ? 'Paid' : 'Partial');
-    LS.set('invoices', invoices);
+    LS.sync('invoices', invoices);
   }
   // Remove old receipt
   pendingPayments = pendingPayments.filter(function(p){ return p.id !== id; });
-  LS.set('pendingPayments', pendingPayments);
+  LS.sync('pendingPayments', pendingPayments);
 
   // Load into form
   navTo('pendingnew', null);
@@ -3642,7 +3633,7 @@ function saveExpense(){
   };
 
   expenses.unshift(expense);
-  LS.set('expenses', expenses);
+  LS.sync('expenses', expenses);
   initExpenseForm();
   renderExpenses();
   renderExpenseDashboard();
@@ -3653,7 +3644,7 @@ function deleteExpense(id){
   if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete expenses');return;}
   if(!confirm('Delete expense?')) return;
   expenses = expenses.filter(function(e){ return e.id !== id; });
-  LS.set('expenses', expenses);
+  LS.sync('expenses', expenses);
   renderExpenses();
   renderExpenseDashboard();
   showToast('Deleted');
@@ -4209,7 +4200,7 @@ function savePurchase(){
   };
 
   purchases.unshift(purchase);
-  LS.set('purchases', purchases);
+  LS.sync('purchases', purchases);
 
   // Auto-update inventory
   var existing = stockItems.find(function(s){
@@ -4218,7 +4209,7 @@ function savePurchase(){
   if(existing){
     existing.qty += qty;
     if(rate > 0) existing.cost = rate; // update cost
-    LS.set('stock', stockItems);
+    LS.sync('stock', stockItems);
     showToast('Purchase saved! ' + item + ' qty updated in inventory (total: ' + existing.qty + ')');
   } else {
     // Add new item to inventory
@@ -4232,7 +4223,7 @@ function savePurchase(){
       mrp: Math.round(rate * 1.5),
       addedOn: date || nowDate()
     });
-    LS.set('stock', stockItems);
+    LS.sync('stock', stockItems);
     showToast('Purchase saved! New item added to inventory.');
   }
 
@@ -4245,7 +4236,7 @@ function deletePurchase(id){
   if(CURRENT_ROLE!=='admin'){showToast('⛔ Only Admin can delete purchases');return;}
   if(!confirm('Delete purchase?')) return;
   purchases = purchases.filter(function(p){ return p.id !== id; });
-  LS.set('purchases', purchases);
+  LS.sync('purchases', purchases);
   renderPurchases();
   showToast('Deleted');
 }
