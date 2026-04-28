@@ -473,6 +473,7 @@ input[type=tel], textarea, select {
       <div class="nav-item" onclick="navTo('purchaselist',this)"><span class="nav-icon">&#128203;</span>Purchase Records</div>
       <div class="nav-sec">Inventory</div>
       <div class="nav-item" onclick="navTo('inventory',this)"><span class="nav-icon">&#128230;</span>Stock Manager</div>
+      <div class="nav-item" onclick="navTo('invreport',this)" id="navitem-invreport"><span class="nav-icon">&#128202;</span>Inventory Report</div>
       <div class="nav-sec">Finance</div>
       <div class="nav-item" onclick="navTo('costing',this)"><span class="nav-icon">&#128176;</span>Cost Calculator</div>
       <div class="nav-item" onclick="navTo('salesreport',this)"><span class="nav-icon">&#128200;</span>Sales Report</div>
@@ -542,7 +543,7 @@ input[type=tel], textarea, select {
               </div>
             </div>
             <div id="splitPaySection">
-              <div style="font-size:11px;font-weight:700;color:var(--g);margin-bottom:8px;font-family:Arial,sans-serif;">Split Amount:</div>
+              <div style="font-size:11px;font-weight:700;color:var(--g);margin-bottom:8px;font-family:Arial,sans-serif;">Split Amount: <span id="split-total-hint" style="color:#546e7a;font-weight:600;"></span></div>
               <div class="row2">
                 <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--mu);display:block;margin-bottom:4px;font-family:Arial,sans-serif;">Cash (Rs)</label><input type="number" id="cashAmt" placeholder="0" inputmode="numeric" oninput="onCashAmtChange()"/></div>
                 <div><label style="font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--mu);display:block;margin-bottom:4px;font-family:Arial,sans-serif;">UPI (Rs)</label><input type="number" id="upiAmt" placeholder="0" inputmode="numeric"/></div>
@@ -801,6 +802,42 @@ input[type=tel], textarea, select {
           <button class="btn btn-gold" onclick="exportInvExcel2()">&#128202; Export</button>
         </div>
         <div id="invList"></div>
+      </div>
+
+      <!-- INVENTORY REPORT -->
+      <div class="page" id="page-invreport">
+        <!-- Filter Bar -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+          <select id="ir-period" onchange="renderInvReport()" style="padding:9px 12px;background:var(--ow);border:1px solid var(--bdr);font-size:13px;font-family:Arial,sans-serif;outline:none;flex:1;min-width:120px;">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly" selected>Monthly</option>
+          </select>
+          <select id="ir-month" onchange="renderInvReport()" style="padding:9px 12px;background:var(--ow);border:1px solid var(--bdr);font-size:13px;font-family:Arial,sans-serif;outline:none;flex:1;min-width:120px;"></select>
+          <select id="ir-item" onchange="renderInvReport()" style="padding:9px 12px;background:var(--ow);border:1px solid var(--bdr);font-size:13px;font-family:Arial,sans-serif;outline:none;flex:1;min-width:120px;"><option value="">All Items</option></select>
+        </div>
+        <!-- Summary Stats -->
+        <div class="stats-grid" id="ir-stats"></div>
+        <!-- Top Selling -->
+        <div class="card">
+          <div class="card-head"><div class="card-icon">&#128293;</div><div class="card-title">Most Selling Items</div></div>
+          <div class="card-body" style="overflow-x:auto;"><div id="ir-topselling"></div></div>
+        </div>
+        <!-- Non Selling -->
+        <div class="card">
+          <div class="card-head"><div class="card-icon">&#10060;</div><div class="card-title">Non-Selling / Slow Items</div></div>
+          <div class="card-body" style="overflow-x:auto;"><div id="ir-nonselling"></div></div>
+        </div>
+        <!-- Item Movement Log -->
+        <div class="card">
+          <div class="card-head"><div class="card-icon">&#128203;</div><div class="card-title">Item Movement Log (IN / OUT)</div></div>
+          <div class="card-body" style="overflow-x:auto;"><div id="ir-movlog"></div></div>
+        </div>
+        <!-- Export Buttons -->
+        <div style="display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;">
+          <button class="btn btn-gold btn-full" onclick="exportInvReportExcel()" style="flex:1;">&#128202; Export Excel</button>
+          <button class="btn btn-green btn-full" onclick="exportInvReportPDF()" style="flex:1;">&#128196; Export PDF</button>
+        </div>
       </div>
 
       <!-- COSTING -->
@@ -1067,6 +1104,7 @@ var LS = {
 var SYNC_KEY='', syncTmr=null, lastSync=0;
 var invoices=[], stockItems=[], savedCustomers=[], items=[], currentInv=null;
 var editingInvId = null; // tracks which invoice is being edited (null = new invoice)
+var stockMovLog = []; // inventory movement log: {id, date, type:'IN'/'OUT', item, qty, ref, note}
 var purchases=[];
 var AUTH={user:'alphamen',pass:'alpha@123'};
 var SETTINGS={biz:'Alphamen Clothing Co.',ph:'',addr:'',gst:''};
@@ -1107,6 +1145,7 @@ async function pushCloud(){
       syncKey: SYNC_KEY,
       invoices: invoices,
       stock: stockItems,
+    stockMovLog: stockMovLog,
       settings: SETTINGS,
       customers: savedCustomers,
       purchases: purchases,
@@ -1151,6 +1190,7 @@ async function pullCloud(){
       if(d && d.syncKey === SYNC_KEY){
         if(Array.isArray(d.invoices)){ invoices = d.invoices; LS.setL('invoices', invoices); }
         if(Array.isArray(d.stock)){ stockItems = d.stock; LS.setL('stock', stockItems); }
+        if(Array.isArray(d.stockMovLog)){ stockMovLog = d.stockMovLog; LS.setL('stockMovLog', stockMovLog); }
         if(d.settings){ SETTINGS = d.settings; LS.setL('settings', SETTINGS); }
         if(Array.isArray(d.customers)){ savedCustomers = d.customers; LS.setL('customers', savedCustomers); }
         if(Array.isArray(d.purchases)){ purchases = d.purchases; LS.setL('purchases', purchases); }
@@ -1366,10 +1406,10 @@ var STAFF_AUTH_DEFAULT = {user:'staff', pass:'staff@123'};
 // Staff ke liye restricted pages - in pages ko staff nahi dekh sakta
 // Staff CAN: invoice (new), history (same-day only), pendingreceipts (share/download), pendingnew, pendingpreview, pending (dashboard), expensenew (add+pdf+share), expenselist (today only)
 // Staff CANNOT: dashboard, payments, purchases, purchaselist, inventory, costing, salesreport, settings, reports, expenses (full dashboard)
-var STAFF_RESTRICTED_PAGES = ['dashboard', 'payments', 'purchases', 'purchaselist', 'inventory', 'costing', 'salesreport', 'settings', 'reports', 'expenses'];
+var STAFF_RESTRICTED_PAGES = ['dashboard', 'payments', 'purchases', 'purchaselist', 'inventory', 'costing', 'salesreport', 'settings', 'reports', 'expenses', 'invreport'];
 
 // Staff ke liye restricted nav items (hidden honge)
-var STAFF_RESTRICTED_NAV_LABELS = ['Dashboard', 'Payments', 'Purchase Dashboard', 'Purchase Records', 'Stock Manager', 'Cost Calculator', 'Sales Report', 'Saved Reports', 'Settings', 'Expense Dashboard'];
+var STAFF_RESTRICTED_NAV_LABELS = ['Dashboard', 'Payments', 'Purchase Dashboard', 'Purchase Records', 'Stock Manager', 'Inventory Report', 'Cost Calculator', 'Sales Report', 'Saved Reports', 'Settings', 'Expense Dashboard'];
 
 function checkLogin(){
   SYNC_KEY = localStorage.getItem('ac_synckey') || '';
@@ -1377,6 +1417,7 @@ function checkLogin(){
   SETTINGS = LS.get('settings') || {biz:'Alphamen Clothing Co.', ph:'', addr:'', gst:''};
   invoices = LS.get('invoices') || [];
   stockItems = LS.get('stock') || [];
+  stockMovLog = LS.get('stockMovLog') || [];
   savedCustomers = LS.get('customers') || [];
   dailyReports = LS.get('dailyReports') || {};
   monthlyReports = LS.get('monthlyReports') || {};
@@ -1656,10 +1697,11 @@ function navTo(page, el, mi){
   if(pg) pg.classList.add('active');
   if(el) el.classList.add('active');
   currentPage = page;
-  var titles = {dashboard:'Dashboard', invoice:'New Invoice', preview:'Invoice Preview', history:'Invoice History', payments:'Payments', inventory:'Stock Manager', costing:'Cost Calculator', salesreport:'Sales Report', settings:'Settings', reports:'Saved Reports', purchases:'Purchase Dashboard', purchaselist:'Purchase Records', pending:'Pending Payments', pendingreceipts:'Payment Receipts', pendingnew:'New Payment Receipt', pendingpreview:'Receipt Preview', expenses:'Expense Dashboard', expenselist:'Expense Records', expensenew:'Add Expense', pending:'Pending Payments', pendingreceipts:'Payment Receipts', pendingnew:'New Payment Receipt', pendingpreview:'Receipt Preview', expenses:'Expense Dashboard', expenselist:'Expense Records', expensenew:'Add Expense'};
+  var titles = {dashboard:'Dashboard', invoice:'New Invoice', preview:'Invoice Preview', history:'Invoice History', payments:'Payments', inventory:'Stock Manager', invreport:'Inventory Report', costing:'Cost Calculator', salesreport:'Sales Report', settings:'Settings', reports:'Saved Reports', purchases:'Purchase Dashboard', purchaselist:'Purchase Records', pending:'Pending Payments', pendingreceipts:'Payment Receipts', pendingnew:'New Payment Receipt', pendingpreview:'Receipt Preview', expenses:'Expense Dashboard', expenselist:'Expense Records', expensenew:'Add Expense', pending:'Pending Payments', pendingreceipts:'Payment Receipts', pendingnew:'New Payment Receipt', pendingpreview:'Receipt Preview', expenses:'Expense Dashboard', expenselist:'Expense Records', expensenew:'Add Expense'};
   var ht = document.getElementById('headerTitle'); if(ht) ht.textContent = titles[page] || page;
   var bb = document.getElementById('backBtn'); if(bb) bb.style.display = pageHistory.length > 0 ? 'flex' : 'none';
   if(page==='invoice') initInvoice();
+  if(page==='invreport') renderInvReport();
   if(page==='dashboard') renderDashboard();
   if(page==='history') renderHistory();
   if(page==='payments') renderPayments();
@@ -1849,7 +1891,29 @@ function onPayModeChange(){
   var pm = document.getElementById('invPayMode');
   var sp = document.getElementById('splitPaySection');
   if(!pm||!sp) return;
-  sp.style.display = pm.value==='Split' ? 'block' : 'none';
+  var isSplit = pm.value === 'Split';
+  sp.style.display = isSplit ? 'block' : 'none';
+  // Reset split fields when switching away
+  if(!isSplit){
+    var caEl = document.getElementById('cashAmt');
+    var uaEl = document.getElementById('upiAmt');
+    if(caEl){ caEl.value=''; caEl.style.borderColor=''; }
+    if(uaEl){ uaEl.value=''; }
+  }
+  // Update split hint label
+  updateSplitHint();
+}
+
+function updateSplitHint(){
+  var hintEl = document.getElementById('split-total-hint');
+  if(!hintEl) return;
+  var sub = items.reduce(function(s,i){return s+(i.qty*i.price);},0);
+  var disc = parseFloat(document.getElementById('discount').value)||0;
+  var totalGst = items.reduce(function(s,i){
+    return s + (i.gstPct>0 ? i.qty*((i.origPrice||i.price)-i.price) : 0);
+  },0);
+  var net = Math.round((Math.max(sub-disc,0)+totalGst)*100)/100;
+  hintEl.textContent = 'Total: Rs.' + net.toFixed(0);
 }
 
 // ===== ITEMS - No duplicates =====
@@ -2028,6 +2092,7 @@ function calcTotals(){
     gstBox.innerHTML = gHtml;
     gstBox.style.display = totalGst > 0 ? 'block' : 'none';
   }
+  updateSplitHint();
 }
 
 function onCashAmtChange(){
@@ -2037,10 +2102,21 @@ function onCashAmtChange(){
   var totalGst = items.reduce(function(s,i){
     return s + (i.gstPct>0 ? i.qty*(i.origPrice-i.price) : 0);
   },0);
-  var net = Math.max(sub-disc, 0) + totalGst; // ← FINAL TOTAL with GST
+  var net = Math.round((Math.max(sub-disc, 0) + totalGst)*100)/100;
   var ca = parseFloat(document.getElementById('cashAmt').value)||0;
-  var ua = document.getElementById('upiAmt');
-  if(ua) ua.value = Math.max(net-ca, 0).toFixed(0);
+  var uaEl = document.getElementById('upiAmt');
+  // Auto-fill UPI as remainder
+  var upiVal = Math.round(Math.max(net-ca, 0)*100)/100;
+  if(uaEl) uaEl.value = upiVal > 0 ? upiVal.toFixed(0) : '';
+  // Real-time colour hint: green if exact, red if over
+  var cashInput = document.getElementById('cashAmt');
+  var splitWrap = document.getElementById('splitPaySection');
+  if(ca > net){
+    if(cashInput) cashInput.style.borderColor = '#d32f2f';
+    if(uaEl) uaEl.value = '0';
+  } else {
+    if(cashInput) cashInput.style.borderColor = '';
+  }
 }
 
 function saveAndNew(){
@@ -2103,12 +2179,46 @@ function collectFormData(){
   var gstType = gstTypeEl ? gstTypeEl.value : 'cgst';
   var disc = parseFloat(document.getElementById('discount').value)||0;
   var totalGstAmt = Object.keys(gstByRate).reduce(function(s,k){return s+gstByRate[k];},0);
-  var total = Math.max(sub-disc,0)+totalGstAmt;
+  var total = Math.round((Math.max(sub-disc,0)+totalGstAmt)*100)/100;
   var pm = document.getElementById('invPayMode').value;
   var ps = document.getElementById('invPayStatus').value;
   var cashAmt=0, upiAmt=0;
-  if(pm==='Split'){ cashAmt=parseFloat(document.getElementById('cashAmt').value)||0; upiAmt=parseFloat(document.getElementById('upiAmt').value)||0; }
-  else if(pm==='Cash'){ cashAmt=total; } else{ upiAmt=total; }
+
+  // ── Payment amount validation ──────────────────────────────────────────────
+  if(pm === 'Split'){
+    cashAmt = parseFloat(document.getElementById('cashAmt').value) || 0;
+    upiAmt  = parseFloat(document.getElementById('upiAmt').value)  || 0;
+    var splitSum = Math.round((cashAmt + upiAmt)*100)/100;
+    if(cashAmt <= 0 && upiAmt <= 0){
+      showToast('⚠️ Split mein Cash aur UPI dono fill karein! Total: Rs.' + total.toFixed(0));
+      document.getElementById('cashAmt').focus();
+      return null;
+    }
+    if(cashAmt < 0 || upiAmt < 0){
+      showToast('⚠️ Amount negative nahi ho sakta!');
+      return null;
+    }
+    if(Math.abs(splitSum - total) > 1){
+      // Auto-correct if only cash was filled (upi auto-calc may have floating point diff)
+      // Show error asking user to fix
+      showToast('⚠️ Cash + UPI = Rs.' + splitSum.toFixed(0) + ' lekin Total = Rs.' + total.toFixed(0) + ' — Please adjust!');
+      document.getElementById('cashAmt').focus();
+      return null;
+    }
+    // Normalise rounding
+    upiAmt = Math.round((total - cashAmt)*100)/100;
+  } else if(pm === 'Cash'){
+    // Non-split: user must manually confirm amount
+    var manualCash = parseFloat(document.getElementById('cashAmt') ? document.getElementById('cashAmt').value : '') || 0;
+    // cashAmt field is hidden for non-split modes, so auto-set to total
+    cashAmt = total;
+    upiAmt  = 0;
+  } else {
+    // UPI / Bank
+    cashAmt = 0;
+    upiAmt  = total;
+  }
+
   return {
     custName:custName,
     invDate:document.getElementById('invDate').value||nowDate(),
@@ -2141,8 +2251,12 @@ function persistInvoice(fd){
     fd.items.forEach(function(item){
       var si = stockItems.find(function(s){ return s.name.toLowerCase()===item.name.toLowerCase(); });
       if(si) si.qty = Math.max(0, si.qty-item.qty);
+      // Log OUT movement
+      stockMovLog.push({id:Date.now()+Math.random(), date:inv.invDate, type:'OUT',
+        item:item.name, qty:item.qty, ref:'Invoice #'+finalInvNo+' ('+inv.custName+')', note:''});
     });
     LS.sync('stock', stockItems);
+    LS.sync('stockMovLog', stockMovLog);
     checkDateChange();
     return inv;
   });
@@ -2518,11 +2632,15 @@ function addStock(){
   if(existing){
     existing.qty+=qty; if(cost>0)existing.cost=cost; if(mrp>0)existing.mrp=mrp;
     LS.sync('stock',stockItems);
+    stockMovLog.push({id:Date.now()+Math.random(), date:nowDate(), type:'IN', item:name, qty:qty, ref:'Manual Inward', note:'Qty updated'});
+    LS.sync('stockMovLog', stockMovLog);
     document.getElementById('inv-name').value=''; document.getElementById('inv-qty').value='10';
     renderInventory(); showToast('Qty updated! Total: '+existing.qty+' pcs'); return;
   }
   stockItems.unshift({id:Date.now(),name:name,category:cat,size:size,qty:qty,cost:cost,mrp:mrp,addedOn:nowDate()});
   LS.sync('stock',stockItems);
+  stockMovLog.push({id:Date.now()+Math.random(), date:nowDate(), type:'IN', item:name, qty:qty, ref:'Manual Inward', note:'New item added'});
+  LS.sync('stockMovLog', stockMovLog);
   document.getElementById('inv-name').value=''; document.getElementById('inv-qty').value='10';
   renderInventory(); showToast('Stock added!');
 }
@@ -2909,7 +3027,12 @@ async function shareWA(inv){
 }
 
 // ===== EXCEL =====
-function xlExport(sheets,filename){
+function xlExport(sheets,filename,sheetNames){
+  sheetNames = sheetNames || sheets.map(function(_,i){ return 'Sheet'+(i+1); });
+  // Wrap single sheet
+  if(!Array.isArray(sheets[0][0])) sheets = [sheets];
+  if(!Array.isArray(sheetNames)) sheetNames = [sheetNames];
+
   if(typeof XLSX==='undefined'){var csv=sheets[0].map(function(r){return r.join(',');}).join('\n');var blob=new Blob(['\uFEFF'+csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename.replace('.xlsx','.csv');a.click();return;}
   var wb=XLSX.utils.book_new();
   sheets.forEach(function(rows,i){XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'Sheet'+(i+1));});
@@ -2918,6 +3041,330 @@ function xlExport(sheets,filename){
 function exportInvExcel(){var i=currentInv;if(!i){showToast('No invoice');return;}var rows=[['ALPHAMEN CLOTHING CO.'],['Invoice No:',i.invNo,'Date:',i.invDate],['Customer:',i.custName,'Phone:',i.custPhone||''],['Payment:',i.payMode,'Status:',i.payStatus]];if(i.payMode==='Split')rows.push(['Cash:',i.cashAmt||0,'UPI:',i.upiAmt||0]);rows.push([''],['Item','Qty','Rate','Amount']);i.items.filter(function(x){return x.name;}).forEach(function(x){rows.push([x.name,x.qty,x.price,x.qty*x.price]);});rows.push([''],['','','Subtotal:',i.sub]);if(i.disc>0)rows.push(['','','Discount:',-i.disc]);rows.push(['','','TOTAL:',i.total]);xlExport([rows],'Invoice_'+(i.invNo||'').replace(/\//g,'_')+'.xlsx');showToast('Exported');}
 function exportHistExcel(){var rows=[['Invoice No','Date','Customer','Phone','Items','Amount','Payment','Status','Cash','UPI']];invoices.forEach(function(i){rows.push([i.invNo,i.invDate,i.custName,i.custPhone||'',i.items?i.items.length:0,i.total,i.payMode,i.payStatus,i.cashAmt||0,i.upiAmt||0]);});xlExport([rows],'Alphamen_Invoices.xlsx');showToast('Exported');}
 function exportPayExcel(){var rows=[['Date','Invoice','Customer','Phone','Mode','Status','Total','Cash','UPI']];invoices.forEach(function(i){rows.push([i.invDate,i.invNo,i.custName,i.custPhone||'-',i.payMode,i.payStatus,i.total,i.cashAmt||0,i.upiAmt||0]);});var ct=invoices.filter(function(i){return i.payMode==='Cash';}).reduce(function(s,i){return s+i.total;},0);var ut=invoices.filter(function(i){return i.payMode==='UPI'||i.payMode==='Bank';}).reduce(function(s,i){return s+i.total;},0);var cs=invoices.filter(function(i){return i.payMode==='Split';}).reduce(function(s,i){return s+(i.cashAmt||0);},0);var us=invoices.filter(function(i){return i.payMode==='Split';}).reduce(function(s,i){return s+(i.upiAmt||0);},0);rows.push([''],['Cash Total','','',ct+cs],['UPI Total','','',ut+us],['Grand Total','','',ct+ut+cs+us]);xlExport([rows],'Alphamen_Payments.xlsx');showToast('Exported');}
+// ═══════════════════════════════════════════════════════════
+// INVENTORY REPORT SYSTEM
+// ═══════════════════════════════════════════════════════════
+
+function getDateRange(period, month) {
+  var now = new Date();
+  var today = nowDate();
+  if (period === 'daily') {
+    return { start: today, end: today };
+  } else if (period === 'weekly') {
+    var d = new Date(now);
+    var day = d.getDay(); // 0=Sun
+    var monday = new Date(d); monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    var sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+    var pad = function(n){ return String(n).padStart(2,'0'); };
+    var fmt = function(dt){ return dt.getFullYear()+'-'+pad(dt.getMonth()+1)+'-'+pad(dt.getDate()); };
+    return { start: fmt(monday), end: fmt(sunday) };
+  } else { // monthly
+    if (month) {
+      var parts = month.split('-');
+      var yr = parseInt(parts[0]), mo = parseInt(parts[1]);
+      var pad2 = function(n){ return String(n).padStart(2,'0'); };
+      var lastDay = new Date(yr, mo, 0).getDate();
+      return { start: yr+'-'+pad2(mo)+'-01', end: yr+'-'+pad2(mo)+'-'+pad2(lastDay) };
+    } else {
+      var yr2 = now.getFullYear(), mo2 = now.getMonth()+1;
+      var pad3 = function(n){ return String(n).padStart(2,'0'); };
+      var lastDay2 = new Date(yr2, mo2, 0).getDate();
+      return { start: yr2+'-'+pad3(mo2)+'-01', end: yr2+'-'+pad3(mo2)+'-'+pad3(lastDay2) };
+    }
+  }
+}
+
+function inRange(date, range) {
+  return date >= range.start && date <= range.end;
+}
+
+function populateIrMonths() {
+  var sel = document.getElementById('ir-month');
+  if (!sel) return;
+  var months = {};
+  stockMovLog.forEach(function(m){ if(m.date) months[m.date.slice(0,7)] = 1; });
+  invoices.forEach(function(i){ if(i.invDate) months[i.invDate.slice(0,7)] = 1; });
+  var keys = Object.keys(months).sort().reverse();
+  var now = new Date();
+  var curMo = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  if (!months[curMo]) keys.unshift(curMo);
+  var cur = sel.value || curMo;
+  sel.innerHTML = keys.map(function(k){
+    var d = new Date(k+'-01');
+    var label = d.toLocaleString('default',{month:'long',year:'numeric'});
+    return '<option value="'+k+'"'+(k===cur?' selected':'')+'>'+label+'</option>';
+  }).join('');
+}
+
+function populateIrItems() {
+  var sel = document.getElementById('ir-item');
+  if (!sel) return;
+  var cur = sel.value;
+  var names = {};
+  stockItems.forEach(function(s){ names[s.name] = 1; });
+  stockMovLog.forEach(function(m){ if(m.item) names[m.item] = 1; });
+  var keys = Object.keys(names).sort();
+  sel.innerHTML = '<option value="">All Items</option>' +
+    keys.map(function(k){ return '<option value="'+k+'"'+(k===cur?' selected':'')+'>'+k+'</option>'; }).join('');
+}
+
+function renderInvReport() {
+  stockMovLog = LS.get('stockMovLog') || [];
+  var period  = document.getElementById('ir-period') ? document.getElementById('ir-period').value : 'monthly';
+  var selMonth = document.getElementById('ir-month') ? document.getElementById('ir-month').value : '';
+  var selItem = document.getElementById('ir-item') ? document.getElementById('ir-item').value : '';
+
+  populateIrMonths();
+  populateIrItems();
+
+  // Recalc month after populate
+  selMonth = document.getElementById('ir-month') ? document.getElementById('ir-month').value : selMonth;
+
+  var range = getDateRange(period, selMonth);
+
+  // Filter log by range
+  var logs = stockMovLog.filter(function(m){ return inRange(m.date, range); });
+  if (selItem) logs = logs.filter(function(m){ return m.item === selItem; });
+
+  // Aggregate by item name: {in, out, customers}
+  var itemMap = {};
+  logs.forEach(function(m) {
+    if (!itemMap[m.item]) itemMap[m.item] = { inQty:0, outQty:0, customers:[] };
+    if (m.type === 'IN') itemMap[m.item].inQty += m.qty;
+    if (m.type === 'OUT') {
+      itemMap[m.item].outQty += m.qty;
+      if (m.ref && m.ref.indexOf('Invoice') === 0) itemMap[m.item].customers.push(m.ref);
+    }
+  });
+
+  // Stats
+  var totalIn = logs.filter(function(m){return m.type==='IN';}).reduce(function(s,m){return s+m.qty;},0);
+  var totalOut = logs.filter(function(m){return m.type==='OUT';}).reduce(function(s,m){return s+m.qty;},0);
+  var uniqueItems = Object.keys(itemMap).length;
+  var statsEl = document.getElementById('ir-stats');
+  if (statsEl) statsEl.innerHTML =
+    '<div class="stat-card"><div class="stat-label">Items Tracked</div><div class="stat-value">'+uniqueItems+'</div></div>'+
+    '<div class="stat-card"><div class="stat-label" style="color:#2e7d32;">Total IN</div><div class="stat-value" style="color:#2e7d32;">'+totalIn+' pcs</div></div>'+
+    '<div class="stat-card red"><div class="stat-label">Total OUT</div><div class="stat-value" style="color:#c0392b;">'+totalOut+' pcs</div></div>'+
+    '<div class="stat-card gold"><div class="stat-label">Net Movement</div><div class="stat-value">'+(totalIn-totalOut)+' pcs</div></div>';
+
+  // Sort by out qty for most selling
+  var sortedItems = Object.keys(itemMap).map(function(name){
+    var entry = itemMap[name];
+    var stock = (stockItems.find(function(s){return s.name===name;})||{}).qty || 0;
+    return {name:name, inQty:entry.inQty, outQty:entry.outQty, stock:stock, customers:entry.customers};
+  }).sort(function(a,b){ return b.outQty - a.outQty; });
+
+  var tblHdr = '<table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;">'+
+    '<thead><tr style="background:linear-gradient(90deg,#2d3a42,#37474f);color:#fff;">'+
+    '<th style="padding:9px 10px;text-align:left;">Item</th>'+
+    '<th style="padding:9px 10px;text-align:center;">IN</th>'+
+    '<th style="padding:9px 10px;text-align:center;">OUT</th>'+
+    '<th style="padding:9px 10px;text-align:center;">Stock</th>'+
+    '</tr></thead><tbody>';
+
+  // Most selling (outQty > 0)
+  var topEl = document.getElementById('ir-topselling');
+  var topItems = sortedItems.filter(function(i){ return i.outQty > 0; });
+  if (topEl) {
+    if (!topItems.length) {
+      topEl.innerHTML = '<div style="text-align:center;color:#999;padding:20px;font-family:Arial,sans-serif;">No sales data in this period</div>';
+    } else {
+      var maxOut = topItems[0].outQty || 1;
+      var rows = topItems.map(function(i, idx) {
+        var pct = Math.round((i.outQty/maxOut)*100);
+        var medal = idx===0 ? '&#127947;' : idx===1 ? '&#129352;' : idx===2 ? '&#129353;' : (idx+1)+'.';
+        return '<tr style="border-bottom:1px solid #f0ede8;'+(idx%2===1?'background:#fafaf9;':'')+'">'+
+          '<td style="padding:9px 10px;font-weight:700;">'+medal+' '+i.name+
+          '<div style="height:4px;background:#e8e4df;margin-top:4px;border-radius:2px;"><div style="height:100%;width:'+pct+'%;background:linear-gradient(90deg,#2e7d32,#66bb6a);border-radius:2px;"></div></div></td>'+
+          '<td style="padding:9px 10px;text-align:center;color:#2e7d32;font-weight:700;">+'+i.inQty+'</td>'+
+          '<td style="padding:9px 10px;text-align:center;color:#c0392b;font-weight:700;">-'+i.outQty+'</td>'+
+          '<td style="padding:9px 10px;text-align:center;font-weight:700;'+(i.stock<=5?'color:#e65100;':'')+'">'+(i.stock||0)+'</td>'+
+          '</tr>';
+      }).join('');
+      topEl.innerHTML = tblHdr + rows + '</tbody></table>';
+    }
+  }
+
+  // Non-selling (all stock items with 0 outQty in this period)
+  var nonEl = document.getElementById('ir-nonselling');
+  if (nonEl) {
+    var soldNames = {};
+    topItems.forEach(function(i){ soldNames[i.name] = 1; });
+    var nonItems = stockItems.filter(function(s){ return !soldNames[s.name] && (!selItem || s.name===selItem); });
+    if (!nonItems.length) {
+      nonEl.innerHTML = '<div style="text-align:center;color:#2e7d32;padding:20px;font-family:Arial,sans-serif;">&#10003; All items sold in this period!</div>';
+    } else {
+      var nrows = nonItems.map(function(s, idx) {
+        return '<tr style="border-bottom:1px solid #f0ede8;'+(idx%2===1?'background:#fafaf9;':'')+'">'+
+          '<td style="padding:9px 10px;font-weight:600;color:#e65100;">&#9888; '+s.name+'</td>'+
+          '<td style="padding:9px 10px;text-align:center;color:#999;">0</td>'+
+          '<td style="padding:9px 10px;text-align:center;color:#999;">0</td>'+
+          '<td style="padding:9px 10px;text-align:center;font-weight:700;'+(s.qty<=5?'color:#e65100;':'')+'">'+(s.qty||0)+'</td>'+
+          '</tr>';
+      }).join('');
+      nonEl.innerHTML = tblHdr + nrows + '</tbody></table>';
+    }
+  }
+
+  // Movement log table
+  var movEl = document.getElementById('ir-movlog');
+  if (movEl) {
+    if (!logs.length) {
+      movEl.innerHTML = '<div style="text-align:center;color:#999;padding:20px;font-family:Arial,sans-serif;">No movement in this period</div>';
+    } else {
+      var mrows = logs.slice().reverse().map(function(m, idx) {
+        var isIn = m.type === 'IN';
+        return '<tr style="border-bottom:1px solid #f0ede8;'+(idx%2===1?'background:#fafaf9;':'')+'">'+
+          '<td style="padding:8px 10px;font-size:11px;color:#666;">'+m.date+'</td>'+
+          '<td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px;background:'+(isIn?'#e8f5e9':'#ffebee')+';color:'+(isIn?'#1b5e20':'#b71c1c')+';">'+m.type+'</span></td>'+
+          '<td style="padding:8px 10px;font-weight:600;font-size:12px;">'+m.item+'</td>'+
+          '<td style="padding:8px 10px;text-align:center;font-weight:700;color:'+(isIn?'#2e7d32':'#c0392b')+';font-size:13px;">'+(isIn?'+':'-')+m.qty+'</td>'+
+          '<td style="padding:8px 10px;font-size:11px;color:#555;">'+m.ref+'</td>'+
+          '</tr>';
+      }).join('');
+      movEl.innerHTML = '<table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;">'+
+        '<thead><tr style="background:linear-gradient(90deg,#2d3a42,#37474f);color:#fff;">'+
+        '<th style="padding:9px 10px;text-align:left;">Date</th>'+
+        '<th style="padding:9px 10px;text-align:left;">Type</th>'+
+        '<th style="padding:9px 10px;text-align:left;">Item</th>'+
+        '<th style="padding:9px 10px;text-align:center;">Qty</th>'+
+        '<th style="padding:9px 10px;text-align:left;">Reference</th>'+
+        '</tr></thead><tbody>'+mrows+'</tbody></table>';
+    }
+  }
+}
+
+// ── Export Inventory Report to Excel ──
+function exportInvReportExcel() {
+  stockMovLog = LS.get('stockMovLog') || [];
+  var period  = document.getElementById('ir-period') ? document.getElementById('ir-period').value : 'monthly';
+  var selMonth = document.getElementById('ir-month') ? document.getElementById('ir-month').value : '';
+  var selItem = document.getElementById('ir-item') ? document.getElementById('ir-item').value : '';
+  var range = getDateRange(period, selMonth);
+  var logs = stockMovLog.filter(function(m){ return inRange(m.date, range); });
+  if (selItem) logs = logs.filter(function(m){ return m.item === selItem; });
+
+  // Sheet 1: Movement Log
+  var logRows = [['Date','Type','Item','Qty','Reference','Note']];
+  logs.slice().reverse().forEach(function(m){
+    logRows.push([m.date, m.type, m.item, m.qty, m.ref||'', m.note||'']);
+  });
+
+  // Sheet 2: Item Summary
+  var itemMap = {};
+  logs.forEach(function(m){
+    if(!itemMap[m.item]) itemMap[m.item]={inQty:0,outQty:0};
+    if(m.type==='IN') itemMap[m.item].inQty+=m.qty;
+    if(m.type==='OUT') itemMap[m.item].outQty+=m.qty;
+  });
+  var summRows = [['Item','Total IN','Total OUT','Net','Current Stock']];
+  Object.keys(itemMap).sort(function(a,b){ return itemMap[b].outQty - itemMap[a].outQty; }).forEach(function(name){
+    var st = (stockItems.find(function(s){return s.name===name;})||{}).qty||0;
+    summRows.push([name, itemMap[name].inQty, itemMap[name].outQty, itemMap[name].inQty-itemMap[name].outQty, st]);
+  });
+
+  var periodLabel = period==='daily'?'Daily':period==='weekly'?'Weekly':(selMonth||'Monthly');
+  xlExport([logRows, summRows], 'Alphamen_InvReport_'+periodLabel+'.xlsx', ['Movement Log','Item Summary']);
+  showToast('Excel exported!');
+}
+
+// ── Export Inventory Report to PDF ──
+function exportInvReportPDF() {
+  stockMovLog = LS.get('stockMovLog') || [];
+  var period  = document.getElementById('ir-period') ? document.getElementById('ir-period').value : 'monthly';
+  var selMonth = document.getElementById('ir-month') ? document.getElementById('ir-month').value : '';
+  var selItem = document.getElementById('ir-item') ? document.getElementById('ir-item').value : '';
+  var range = getDateRange(period, selMonth);
+  var logs = stockMovLog.filter(function(m){ return inRange(m.date, range); });
+  if (selItem) logs = logs.filter(function(m){ return m.item === selItem; });
+
+  // Aggregate
+  var itemMap = {};
+  logs.forEach(function(m){
+    if(!itemMap[m.item]) itemMap[m.item]={inQty:0,outQty:0};
+    if(m.type==='IN') itemMap[m.item].inQty+=m.qty;
+    if(m.type==='OUT') itemMap[m.item].outQty+=m.qty;
+  });
+  var sorted = Object.keys(itemMap).sort(function(a,b){ return itemMap[b].outQty-itemMap[a].outQty; });
+  var totalIn = logs.filter(function(m){return m.type==='IN';}).reduce(function(s,m){return s+m.qty;},0);
+  var totalOut = logs.filter(function(m){return m.type==='OUT';}).reduce(function(s,m){return s+m.qty;},0);
+  var periodLabel = period==='daily'?'Daily':period==='weekly'?'Weekly':'Monthly ('+selMonth+')';
+  var biz = (LS.get('settings')||{}).biz || 'Alphamen Clothing Co.';
+
+  var now = new Date();
+  var dateStr = now.getDate().toString().padStart(2,'0')+'/'+(now.getMonth()+1).toString().padStart(2,'0')+'/'+now.getFullYear();
+  var hours = now.getHours().toString().padStart(2,'0');
+  var mins = now.getMinutes().toString().padStart(2,'0');
+  var timeStr = hours+':'+mins;
+  var reportTypeLabel = period==='daily'?'Daily Report':period==='weekly'?'Weekly Report':'Monthly Report';
+  var logoHtml = LOGO_URL && LOGO_URL.indexOf('data:image') === 0
+    ? '<img src="'+LOGO_URL+'" style="height:52px;width:52px;object-fit:contain;border-radius:2px;" alt="Logo"/>'
+    : '';
+
+  var html = '<!DOCTYPE html><html><head><meta charset="utf-8">'+
+    '<title>Inventory Report</title>'+
+    '<style>body{font-family:Arial,sans-serif;margin:0;padding:20px;color:#1c2b33;}'+
+    '.header{display:flex;align-items:center;gap:14px;border-bottom:3px solid #2d3a42;padding-bottom:14px;margin-bottom:18px;}'+
+    '.header-logo{flex-shrink:0;}'+
+    '.header-info{flex:1;}'+
+    'h1{font-size:22px;font-weight:700;letter-spacing:3px;text-transform:uppercase;margin:0 0 3px 0;}'+
+    '.sub{font-size:11px;color:#546e7a;letter-spacing:2px;text-transform:uppercase;margin-bottom:20px;}'+
+    '.stats{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;}'+
+    '.stat{flex:1;min-width:100px;padding:12px;border:1px solid #e0ddd8;text-align:center;}'+
+    '.stat .lbl{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#546e7a;}'+
+    '.stat .val{font-size:20px;font-weight:700;margin-top:4px;}'+
+    'table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:20px;}'+
+    'th{background:#2d3a42;color:#fff;padding:8px 10px;text-align:left;}'+
+    'td{padding:7px 10px;border-bottom:1px solid #e8e4df;}'+
+    'tr:nth-child(even) td{background:#fafaf9;}'+
+    '.in{color:#1b5e20;font-weight:700;} .out{color:#b71c1c;font-weight:700;}'+
+    '.badge-in{background:#e8f5e9;color:#1b5e20;padding:2px 7px;font-size:9px;font-weight:700;letter-spacing:1px;}'+
+    '.badge-out{background:#ffebee;color:#b71c1c;padding:2px 7px;font-size:9px;font-weight:700;letter-spacing:1px;}'+
+    'h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:2px;border-bottom:2px solid #2d3a42;padding-bottom:6px;margin-top:24px;}'+
+    '</style></head><body>'+
+    '<div class="header">'+
+      '<div class="header-logo">'+logoHtml+'</div>'+
+      '<div class="header-info">'+
+        '<h1>'+biz+'</h1>'+
+        '<div style="font-size:12px;color:#37474f;font-weight:700;text-transform:uppercase;letter-spacing:2px;">Inventory Movement Report</div>'+
+        '<div style="font-size:11px;color:#546e7a;margin-top:3px;">'+reportTypeLabel+' &nbsp;|&nbsp; Generated: '+dateStr+' at '+timeStr+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div class="stats">'+
+    '<div class="stat"><div class="lbl">Total IN</div><div class="val in">+'+totalIn+'</div></div>'+
+    '<div class="stat"><div class="lbl">Total OUT</div><div class="val out">-'+totalOut+'</div></div>'+
+    '<div class="stat"><div class="lbl">Net</div><div class="val">'+(totalIn-totalOut)+'</div></div>'+
+    '<div class="stat"><div class="lbl">Items</div><div class="val">'+sorted.length+'</div></div>'+
+    '</div>'+
+    '<h2>Item Summary</h2>'+
+    '<table><thead><tr><th>#</th><th>Item</th><th>IN</th><th>OUT</th><th>Net</th><th>Stock Now</th></tr></thead><tbody>'+
+    sorted.map(function(name,i){
+      var st=(stockItems.find(function(s){return s.name===name;})||{}).qty||0;
+      var d=itemMap[name];
+      return '<tr><td>'+(i+1)+'</td><td><b>'+name+'</b></td>'+
+        '<td class="in">+'+d.inQty+'</td><td class="out">-'+d.outQty+'</td>'+
+        '<td>'+(d.inQty-d.outQty)+'</td><td>'+(st<=5?'<span style="color:#e65100;">⚠ ':'')+(st||0)+(st<=5?'</span>':'')+'</td></tr>';
+    }).join('')+
+    '</tbody></table>'+
+    '<h2>Movement Log</h2>'+
+    '<table><thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Reference</th></tr></thead><tbody>'+
+    logs.slice().reverse().map(function(m,i){
+      var isIn=m.type==='IN';
+      return '<tr><td>'+m.date+'</td>'+
+        '<td><span class="'+(isIn?'badge-in':'badge-out')+'">'+m.type+'</span></td>'+
+        '<td><b>'+m.item+'</b></td>'+
+        '<td class="'+(isIn?'in':'out')+'">'+(isIn?'+':'-')+m.qty+'</td>'+
+        '<td>'+m.ref+'</td></tr>';
+    }).join('')+
+    '</tbody></table>'+
+    '</body></html>';
+
+  var win = window.open('','_blank','width=900,height=700');
+  if(win){ win.document.write(html); win.document.close(); setTimeout(function(){ win.print(); },600); }
+  else { showToast('Popup blocked — allow popups and try again'); }
+}
+
 function exportInvExcel2(){var rows=[['Item','Category','Size','Qty','Cost','MRP','Profit','Value','Added On']];stockItems.forEach(function(i){rows.push([i.name,i.category,i.size,i.qty,i.cost,i.mrp,i.mrp-i.cost,i.qty*i.cost,i.addedOn]);});rows.push([''],['Total','','',stockItems.reduce(function(s,i){return s+(i.qty*i.cost);},0)]);xlExport([rows],'Alphamen_Inventory.xlsx');showToast('Exported');}
 function exportSalesExcel(){var daily={},monthly={};invoices.forEach(function(i){var d=i.invDate||'';if(!daily[d])daily[d]={total:0,count:0,cash:0,upi:0};daily[d].total+=i.total;daily[d].count++;if(i.payMode==='Cash')daily[d].cash+=i.total;else if(i.payMode==='UPI'||i.payMode==='Bank')daily[d].upi+=i.total;else if(i.payMode==='Split'){daily[d].cash+=(i.cashAmt||0);daily[d].upi+=(i.upiAmt||0);}var mk=monthKey(i.invDate)||'';if(!monthly[mk])monthly[mk]={total:0,count:0};monthly[mk].total+=i.total;monthly[mk].count++;});var rows=[['SALES REPORT'],[''],['DAILY'],['Date','Count','Cash','UPI','Total']];Object.keys(daily).sort(function(a,b){return b.localeCompare(a);}).forEach(function(d){rows.push([d,daily[d].count,daily[d].cash,daily[d].upi,daily[d].total]);});rows.push([''],['MONTHLY'],['Month','Count','Total']);Object.keys(monthly).forEach(function(m){rows.push([m,monthly[m].count,monthly[m].total]);});xlExport([rows],'Alphamen_SalesReport.xlsx');showToast('Exported');}
 function exportAll(){if(typeof XLSX==='undefined'){showToast('Loading...');return;}var wb=XLSX.utils.book_new();var ir=[['Invoice No','Date','Customer','Phone','Amount','Payment','Status','Cash','UPI']];invoices.forEach(function(i){ir.push([i.invNo,i.invDate,i.custName,i.custPhone||'-',i.total,i.payMode,i.payStatus,i.cashAmt||0,i.upiAmt||0]);});XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(ir),'Invoices');var sr=[['Item','Category','Size','Qty','Cost','MRP','Profit']];stockItems.forEach(function(i){sr.push([i.name,i.category,i.size,i.qty,i.cost,i.mrp,i.mrp-i.cost]);});XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sr),'Inventory');if(pendingPayments && pendingPayments.length){var pr=[['Receipt No','Date','Customer','Invoice','Pending','Paid','Remaining','Mode']];pendingPayments.forEach(function(r){pr.push([r.receiptNo,r.date,r.custName,r.invNo,r.pendingAmt,r.paidAmt,r.remainingAmt,r.payMode]);});XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(pr),'PendingReceipts');}
@@ -4313,6 +4760,8 @@ function savePurchase(){
     existing.qty += qty;
     if(rate > 0) existing.cost = rate; // update cost
     LS.sync('stock', stockItems);
+    stockMovLog.push({id:Date.now()+Math.random(), date:date||nowDate(), type:'IN', item:item, qty:qty, ref:'Purchase - '+supplier, note:notes});
+    LS.sync('stockMovLog', stockMovLog);
     showToast('Purchase saved! ' + item + ' qty updated in inventory (total: ' + existing.qty + ')');
   } else {
     // Add new item to inventory
@@ -4327,6 +4776,8 @@ function savePurchase(){
       addedOn: date || nowDate()
     });
     LS.sync('stock', stockItems);
+    stockMovLog.push({id:Date.now()+Math.random(), date:date||nowDate(), type:'IN', item:item, qty:qty, ref:'Purchase - '+supplier, note:notes||'New item'});
+    LS.sync('stockMovLog', stockMovLog);
     showToast('Purchase saved! New item added to inventory.');
   }
 
