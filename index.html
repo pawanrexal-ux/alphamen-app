@@ -792,7 +792,8 @@ input[type=tel], textarea, select {
         <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
           <div class="search-wrap" style="flex:1;margin-bottom:0;"><input class="search-box" type="text" id="pur-search" placeholder="Search item, supplier..." oninput="renderPurchases()" style="font-family:Arial,sans-serif;"/></div>
           <select id="pur-month" onchange="renderPurchases()" style="padding:9px 11px;background:var(--ow);border:1px solid var(--bdr);font-size:13px;outline:none;min-width:120px;"><option value="">All Months</option></select>
-          <button class="btn btn-gold" onclick="exportPurchaseExcel()">&#128202; Export</button>
+          <button class="btn btn-gold" onclick="exportPurchaseExcel()">&#128202; Excel</button>
+          <button class="btn btn-green" onclick="exportPurchasePDF()">&#128196; PDF</button>
         </div>
         <div class="stats-grid" id="pur-stats"></div>
         <div class="card"><div class="card-head"><div class="card-icon">&#128203;</div><div class="card-title">Purchase Records</div></div>
@@ -2659,27 +2660,34 @@ function renderPayments(){
   var filter = document.getElementById('pay-filter') ? document.getElementById('pay-filter').value : '';
 
   // ---- Stats ----
-  // Only count actually received amounts (exclude fully pending invoices)
-  var saleCash = invoices.filter(function(i){return i.payMode==='Cash' && i.payStatus!=='Pending';}).reduce(function(s,i){
-    // Partial: only paidAmount received
-    return s + (i.payStatus==='Partial' ? (i.paidAmount||0) : i.total);
-  },0);
-  var saleUpi = invoices.filter(function(i){return (i.payMode==='UPI'||i.payMode==='Bank') && i.payStatus!=='Pending';}).reduce(function(s,i){
-    return s + (i.payStatus==='Partial' ? (i.paidAmount||0) : i.total);
-  },0);
+  pendingPayments = LS.get('pendingPayments')||[];
+
+  // Directly received on invoices (Paid only — no pending/partial)
+  var saleCash = invoices.filter(function(i){return i.payMode==='Cash' && i.payStatus==='Paid';}).reduce(function(s,i){return s+i.total;},0);
+  var saleUpi  = invoices.filter(function(i){return (i.payMode==='UPI'||i.payMode==='Bank') && i.payStatus==='Paid';}).reduce(function(s,i){return s+i.total;},0);
   var cSp = invoices.filter(function(i){return i.payMode==='Split';}).reduce(function(s,i){return s+(i.cashAmt||0);},0);
   var uSp = invoices.filter(function(i){return i.payMode==='Split';}).reduce(function(s,i){return s+(i.upiAmt||0);},0);
+
+  // Partial payments collected via pending receipts
+  var receiptCash = pendingPayments.filter(function(r){return r.payMode==='Cash';}).reduce(function(s,r){return s+(r.paidAmt||0);},0);
+  var receiptUpi  = pendingPayments.filter(function(r){return r.payMode==='UPI'||r.payMode==='Bank';}).reduce(function(s,r){return s+(r.paidAmt||0);},0);
+  var receiptCSp  = pendingPayments.filter(function(r){return r.payMode==='Split';}).reduce(function(s,r){return s+(r.cashAmt||0);},0);
+  var receiptUSp  = pendingPayments.filter(function(r){return r.payMode==='Split';}).reduce(function(s,r){return s+(r.upiAmt||0);},0);
+
+  var totalCashIn = saleCash + cSp + receiptCash + receiptCSp;
+  var totalUpiIn  = saleUpi  + uSp + receiptUpi  + receiptUSp;
   var pendAmt = invoices.filter(function(i){return i.payStatus==='Pending'||i.payStatus==='Partial';}).reduce(function(s,i){return s+(i.total-(i.paidAmount||0));},0);
   var purTotal = purchases.reduce(function(s,p){return s+p.totalCost;},0);
   var expTotal = expenses.reduce(function(s,e){return s+e.amount;},0);
+  var netTotal = totalCashIn + totalUpiIn - purTotal - expTotal;
 
   var ps = document.getElementById('pay-stats');
   if(ps) ps.innerHTML =
-    '<div class="stat-card"><div class="stat-label">Sale Cash In</div><div class="stat-value" style="color:#2e7d32;">'+fmt(saleCash+cSp)+'</div></div>'+
-    '<div class="stat-card"><div class="stat-label">Sale UPI In</div><div class="stat-value" style="color:#1565c0;">'+fmt(saleUpi+uSp)+'</div></div>'+
+    '<div class="stat-card"><div class="stat-label">Cash In</div><div class="stat-value" style="color:#2e7d32;">'+fmt(totalCashIn)+'</div></div>'+
+    '<div class="stat-card"><div class="stat-label">UPI In</div><div class="stat-value" style="color:#1565c0;">'+fmt(totalUpiIn)+'</div></div>'+
     '<div class="stat-card red"><div class="stat-label">Purchase Out</div><div class="stat-value" style="color:#1565c0;">'+fmt(purTotal)+'</div></div>'+
     '<div class="stat-card red"><div class="stat-label">Expense Out</div><div class="stat-value" style="color:#c0392b;">'+fmt(expTotal)+'</div></div>'+
-    '<div class="stat-card gold"><div class="stat-label">Net (Sale-Pur-Exp)</div><div class="stat-value" style="color:'+(saleCash+cSp+saleUpi+uSp-purTotal-expTotal>=0?'#2e7d32':'#c0392b')+';">'+fmt(saleCash+cSp+saleUpi+uSp-purTotal-expTotal)+'</div></div>'+
+    '<div class="stat-card gold"><div class="stat-label">Net (Sale-Pur-Exp)</div><div class="stat-value" style="color:'+(netTotal>=0?'#2e7d32':'#c0392b')+';">'+fmt(netTotal)+'</div></div>'+
     '<div class="stat-card"><div class="stat-label">Sale Pending</div><div class="stat-value" style="color:#e65100;">'+fmt(pendAmt)+'</div></div>';
 
   var pl = document.getElementById('payList');
@@ -2717,8 +2725,8 @@ function renderPayments(){
     var dayIn = (day.sales||[]).reduce(function(s,i){
       if(i.payStatus==='Pending') return s;
       if(i.payMode==='Split') return s + (i.cashAmt||0) + (i.upiAmt||0);
-      if(i.payStatus==='Partial') return s + (i.paidAmount||0);
-      return s + i.total;
+      if(i.payStatus==='Paid') return s + i.total;
+      return s; // Partial — counted via receipts separately
     },0);
     var dayPur = (day.purchases||[]).reduce(function(s,p){return s+p.totalCost;},0);
     var dayExp = (day.expenses||[]).reduce(function(s,e){return s+e.amount;},0);
@@ -4081,6 +4089,9 @@ function renderPendingReceipts(){
   }
   var h='';
   pendingPayments.forEach(function(r){
+    // Live remaining from invoice — more accurate than stored r.remainingAmt
+    var liveInv = invoices.find(function(i){return i.invNo===r.invNo;});
+    var liveRemaining = liveInv ? Math.max(0, liveInv.total - (liveInv.paidAmount||0)) : (r.remainingAmt||0);
     var isSplit = (r.payMode==='Split');
     var modeBadge = isSplit
       ? '<span class="pay-badge pay-cash">Cash</span> <span class="pay-badge pay-upi">UPI</span>'
@@ -4099,7 +4110,7 @@ function renderPendingReceipts(){
       +'<div style="margin-top:3px;">'+modeBadge+'</div>'+splitLine+'</div>'
       +'<div style="text-align:right;">'
       +'<div style="font-family:Cormorant Garamond,serif;font-size:18px;font-weight:700;color:#2e7d32;">'+fmt(r.paidAmt)+'</div>'
-      +(r.remainingAmt>0?'<div style="font-size:10px;color:#e65100;font-family:Arial,sans-serif;">Bal: '+fmt(r.remainingAmt)+'</div>':'<div style="font-size:10px;color:#1b5e20;font-weight:700;font-family:Arial,sans-serif;">✓ Paid Full</div>')
+      +(liveRemaining>0?'<div style="font-size:10px;color:#e65100;font-family:Arial,sans-serif;">Bal: '+fmt(liveRemaining)+'</div>':'<div style="font-size:10px;color:#1b5e20;font-weight:700;font-family:Arial,sans-serif;">✓ Paid Full</div>')
       +'</div></div>'
       +'<div style="display:flex;gap:5px;flex-wrap:wrap;">'
       +'<button class="btn btn-outline" style="padding:4px 9px;font-size:9px;" data-action="viewr" data-rid="'+r.id+'">View</button>'
@@ -5230,6 +5241,110 @@ function exportPurchaseExcel(){
   xlExport([rows], 'Alphamen_Purchases.xlsx');
   showToast('Purchase report exported!');
 }
+
+function exportPurchasePDF(){
+  var search = (document.getElementById('pur-search') ? document.getElementById('pur-search').value : '').toLowerCase();
+  var selMonth = document.getElementById('pur-month') ? document.getElementById('pur-month').value : '';
+  var filtered = purchases.filter(function(p){
+    var matchSearch = !search || p.item.toLowerCase().indexOf(search)!==-1 || p.supplier.toLowerCase().indexOf(search)!==-1;
+    var matchMonth = !selMonth || monthKey(p.date)===selMonth;
+    return matchSearch && matchMonth;
+  });
+
+  var totalAmt    = filtered.reduce(function(s,p){return s+p.totalCost;},0);
+  var totalQty    = filtered.reduce(function(s,p){return s+p.qty;},0);
+  var totalFreight= filtered.reduce(function(s,p){return s+p.freight;},0);
+  var biz = (LS.get('settings')||{}).biz || 'Alphamen Clothing Co.';
+  var periodLabel = selMonth || 'All Time';
+  var now = new Date();
+  var dateStr = now.getDate().toString().padStart(2,'0')+'/'+(now.getMonth()+1).toString().padStart(2,'0')+'/'+now.getFullYear();
+
+  // Group by date
+  var dg = {};
+  filtered.forEach(function(p){
+    var dk = p.date||'Unknown';
+    if(!dg[dk]) dg[dk]=[];
+    dg[dk].push(p);
+  });
+
+  var rows = Object.keys(dg).sort(function(a,b){return b.localeCompare(a);}).map(function(date){
+    var dayTotal = dg[date].reduce(function(s,p){return s+p.totalCost;},0);
+    var itemRows = dg[date].map(function(p,i){
+      return '<tr style="background:'+(i%2===0?'#fff':'#f9f9f9')+';">'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;">'+escH(p.item)+'</td>'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;color:#546e7a;">'+escH(p.supplier||'-')+'</td>'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;text-align:center;font-weight:700;">'+p.qty+'</td>'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;text-align:right;">'+fmtNum(p.rate)+'</td>'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;text-align:right;color:#e65100;">'+fmtNum(p.freight)+'</td>'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:700;color:#1565c0;">'+fmtNum(p.totalCost)+'</td>'+
+        '<td style="padding:7px 10px;border-bottom:1px solid #eee;font-size:10px;color:#999;">'+escH(p.notes||'-')+'</td>'+
+        '</tr>';
+    }).join('');
+    return '<tr style="background:#e3f2fd;"><td colspan="7" style="padding:8px 10px;font-weight:700;font-size:12px;letter-spacing:0.5px;">'+
+      date+' &nbsp;<span style="font-weight:400;font-size:11px;color:#1565c0;">'+dg[date].length+' items — '+fmtNum(dayTotal)+'</span></td></tr>'+itemRows;
+  }).join('');
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"/>'+
+    '<title>Purchase Report — '+biz+'</title>'+
+    '<style>'+
+    '*{margin:0;padding:0;box-sizing:border-box;}'+
+    'body{font-family:Arial,sans-serif;background:#fff;color:#1a2a2a;padding:28px;font-size:12px;}'+
+    'h1{font-family:Georgia,serif;font-size:24px;font-weight:700;color:#0d2818;letter-spacing:1px;}'+
+    '.sub{font-size:11px;color:#666;margin-top:3px;}'+
+    '.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0;}'+
+    '.kpi{background:#f0f4f8;border-radius:3px;padding:12px;border-left:3px solid #1565c0;text-align:center;}'+
+    '.kpi-label{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:#888;margin-bottom:4px;}'+
+    '.kpi-val{font-family:Georgia,serif;font-size:18px;font-weight:700;color:#1565c0;}'+
+    'table{width:100%;border-collapse:collapse;}'+
+    'th{background:#1a3a5c;color:#fff;padding:9px 10px;text-align:left;font-size:11px;letter-spacing:0.5px;}'+
+    'th:nth-child(3),th:nth-child(4),th:nth-child(5),th:nth-child(6){text-align:right;}'+
+    '.total-row td{background:#e3f2fd;font-weight:700;font-size:13px;border-top:2px solid #1565c0;}'+
+    'td{font-size:11px;}'+
+    '@media print{body{padding:14px;}}'+
+    '</style></head><body>'+
+
+    // Header
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1a3a5c;padding-bottom:14px;margin-bottom:6px;">'+
+    '<div><h1>'+escH(biz)+'</h1>'+
+    '<div class="sub">Purchase Records Report</div>'+
+    '<div class="sub">Period: '+periodLabel+'</div></div>'+
+    '<div style="text-align:right;font-size:10px;color:#888;">Generated: '+dateStr+'</div>'+
+    '</div>'+
+
+    // KPI
+    '<div class="kpi-grid">'+
+    '<div class="kpi"><div class="kpi-label">Total Records</div><div class="kpi-val">'+filtered.length+'</div></div>'+
+    '<div class="kpi"><div class="kpi-label">Total Qty</div><div class="kpi-val">'+totalQty+'</div></div>'+
+    '<div class="kpi" style="border-left-color:#e65100;"><div class="kpi-label">Total Freight</div><div class="kpi-val" style="color:#e65100;">'+fmtNum(totalFreight)+'</div></div>'+
+    '<div class="kpi" style="border-left-color:#1b5e20;"><div class="kpi-label">Total Purchase</div><div class="kpi-val" style="color:#1b5e20;">'+fmtNum(totalAmt)+'</div></div>'+
+    '</div>'+
+
+    // Table
+    '<table><thead><tr>'+
+    '<th>Item</th><th>Supplier</th><th style="text-align:center;">Qty</th>'+
+    '<th style="text-align:right;">Rate</th><th style="text-align:right;">Freight</th>'+
+    '<th style="text-align:right;">Total</th><th>Notes</th>'+
+    '</tr></thead><tbody>'+rows+
+    '<tr class="total-row">'+
+    '<td colspan="2" style="padding:9px 10px;">TOTAL</td>'+
+    '<td style="padding:9px 10px;text-align:center;">'+totalQty+'</td>'+
+    '<td style="padding:9px 10px;"></td>'+
+    '<td style="padding:9px 10px;text-align:right;color:#e65100;">'+fmtNum(totalFreight)+'</td>'+
+    '<td style="padding:9px 10px;text-align:right;color:#1565c0;">'+fmtNum(totalAmt)+'</td>'+
+    '<td style="padding:9px 10px;"></td>'+
+    '</tr>'+
+    '</tbody></table>'+
+    '<div style="margin-top:24px;text-align:center;font-size:10px;color:#aaa;border-top:1px solid #eee;padding-top:10px;">Alphamen Business Suite — Confidential</div>'+
+    '</body></html>';
+
+  var win = window.open('','_blank');
+  if(!win){showToast('Popup blocked! Allow popups and try again.');return;}
+  win.document.write(html);
+  win.document.close();
+  win.onload = function(){win.focus();win.print();};
+  showToast('PDF ready to print/save!');
+}
+
 
 
 
