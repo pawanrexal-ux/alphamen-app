@@ -2662,33 +2662,46 @@ function renderPayments(){
   // ---- Stats ----
   pendingPayments = LS.get('pendingPayments')||[];
 
-  // Directly received on invoices (Paid only — no pending/partial)
-  var saleCash = invoices.filter(function(i){return i.payMode==='Cash' && i.payStatus==='Paid';}).reduce(function(s,i){return s+i.total;},0);
-  var saleUpi  = invoices.filter(function(i){return (i.payMode==='UPI'||i.payMode==='Bank') && i.payStatus==='Paid';}).reduce(function(s,i){return s+i.total;},0);
-  var cSp = invoices.filter(function(i){return i.payMode==='Split';}).reduce(function(s,i){return s+(i.cashAmt||0);},0);
-  var uSp = invoices.filter(function(i){return i.payMode==='Split';}).reduce(function(s,i){return s+(i.upiAmt||0);},0);
-
-  // Partial payments collected via pending receipts
-  var receiptCash = pendingPayments.filter(function(r){return r.payMode==='Cash';}).reduce(function(s,r){return s+(r.paidAmt||0);},0);
-  var receiptUpi  = pendingPayments.filter(function(r){return r.payMode==='UPI'||r.payMode==='Bank';}).reduce(function(s,r){return s+(r.paidAmt||0);},0);
-  var receiptCSp  = pendingPayments.filter(function(r){return r.payMode==='Split';}).reduce(function(s,r){return s+(r.cashAmt||0);},0);
-  var receiptUSp  = pendingPayments.filter(function(r){return r.payMode==='Split';}).reduce(function(s,r){return s+(r.upiAmt||0);},0);
-
-  var totalCashIn = saleCash + cSp + receiptCash + receiptCSp;
-  var totalUpiIn  = saleUpi  + uSp + receiptUpi  + receiptUSp;
+  // Single source of truth: what was actually received per invoice
+  // For each invoice, actual received = paidAmount (set when invoice saved or partial receipt recorded)
+  // We split by payment mode to get Cash In vs UPI In
+  var totalCashIn = 0, totalUpiIn = 0;
+  invoices.forEach(function(inv){
+    var received = inv.payStatus === 'Pending' ? 0
+                 : inv.payStatus === 'Partial'  ? (inv.paidAmount||0)
+                 : inv.total; // Paid
+    if(received <= 0) return;
+    if(inv.payMode === 'Cash') totalCashIn += received;
+    else if(inv.payMode === 'UPI' || inv.payMode === 'Bank') totalUpiIn += received;
+    else if(inv.payMode === 'Split'){
+      // Split: use stored cashAmt/upiAmt proportionally if partial
+      var splitTotal = (inv.cashAmt||0) + (inv.upiAmt||0);
+      if(splitTotal > 0){
+        var ratio = received / splitTotal;
+        totalCashIn += (inv.cashAmt||0) * ratio;
+        totalUpiIn  += (inv.upiAmt||0) * ratio;
+      } else {
+        // fallback: split equally
+        totalCashIn += received / 2;
+        totalUpiIn  += received / 2;
+      }
+    }
+  });
   var pendAmt = invoices.filter(function(i){return i.payStatus==='Pending'||i.payStatus==='Partial';}).reduce(function(s,i){return s+(i.total-(i.paidAmount||0));},0);
   var purTotal = purchases.reduce(function(s,p){return s+p.totalCost;},0);
   var expTotal = expenses.reduce(function(s,e){return s+e.amount;},0);
   var netTotal = totalCashIn + totalUpiIn - purTotal - expTotal;
+  var totalRevenue = invoices.reduce(function(s,i){return s+i.total;},0);
 
   var ps = document.getElementById('pay-stats');
   if(ps) ps.innerHTML =
-    '<div class="stat-card"><div class="stat-label">Cash In</div><div class="stat-value" style="color:#2e7d32;">'+fmt(totalCashIn)+'</div></div>'+
-    '<div class="stat-card"><div class="stat-label">UPI In</div><div class="stat-value" style="color:#1565c0;">'+fmt(totalUpiIn)+'</div></div>'+
+    '<div class="stat-card gold"><div class="stat-label">Total Revenue (Invoiced)</div><div class="stat-value" style="color:#1b5e20;">'+fmt(totalRevenue)+'</div></div>'+
+    '<div class="stat-card"><div class="stat-label">Cash In (Collected)</div><div class="stat-value" style="color:#2e7d32;">'+fmt(totalCashIn)+'</div></div>'+
+    '<div class="stat-card"><div class="stat-label">UPI In (Collected)</div><div class="stat-value" style="color:#1565c0;">'+fmt(totalUpiIn)+'</div></div>'+
     '<div class="stat-card red"><div class="stat-label">Purchase Out</div><div class="stat-value" style="color:#1565c0;">'+fmt(purTotal)+'</div></div>'+
     '<div class="stat-card red"><div class="stat-label">Expense Out</div><div class="stat-value" style="color:#c0392b;">'+fmt(expTotal)+'</div></div>'+
-    '<div class="stat-card gold"><div class="stat-label">Net (Sale-Pur-Exp)</div><div class="stat-value" style="color:'+(netTotal>=0?'#2e7d32':'#c0392b')+';">'+fmt(netTotal)+'</div></div>'+
-    '<div class="stat-card"><div class="stat-label">Sale Pending</div><div class="stat-value" style="color:#e65100;">'+fmt(pendAmt)+'</div></div>';
+    '<div class="stat-card"><div class="stat-label">Sale Pending</div><div class="stat-value" style="color:#e65100;">'+fmt(pendAmt)+'</div></div>'+
+    '<div class="stat-card gold"><div class="stat-label">Net (Collected-Pur-Exp)</div><div class="stat-value" style="color:'+(netTotal>=0?'#2e7d32':'#c0392b')+';">'+fmt(netTotal)+'</div></div>';
 
   var pl = document.getElementById('payList');
   if(!pl) return;
