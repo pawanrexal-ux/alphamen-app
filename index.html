@@ -2990,66 +2990,96 @@ function renderPayments(){
     return;
   }
 
-  var h = '';
-  Object.keys(dg).sort(function(a,b){return b.localeCompare(a);}).forEach(function(date){
-    var day = dg[date];
-    var dayIn = (day.sales||[]).reduce(function(s,i){
-      if(i.payStatus==='Pending') return s;
-      if(i.payMode==='Split') return s + (i.cashAmt||0) + (i.upiAmt||0);
-      if(i.payStatus==='Paid') return s + i.total;
-      return s; // Partial — counted via receipts separately
-    },0);
-    var dayPur = (day.purchases||[]).reduce(function(s,p){return s+p.totalCost;},0);
-    var dayExp = (day.expenses||[]).reduce(function(s,e){return s+e.amount;},0);
-    var dayNet = dayIn - dayPur - dayExp;
-    var netCol = dayNet >= 0 ? '#2e7d32' : '#c0392b';
-    var did = 'pf'+date.replace(/[^a-zA-Z0-9]/g,'');
-    var rows = '';
-
-    (day.sales||[]).forEach(function(i){
-      var pb1 = '<span class="pay-badge '+(i.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(i.payMode)+'</span>';
-      var pb2 = '<span class="pay-badge '+(i.payStatus==='Paid'?'pay-paid':i.payStatus==='Partial'?'pay-partial':'pay-pending')+'">'+escH(i.payStatus)+'</span>';
-      rows += '<tr style="background:#f0fff4;">'
-        +'<td><span style="font-size:9px;background:#2e7d32;color:#fff;padding:1px 5px;">SALE</span></td>'
-        +'<td style="font-family:Arial,sans-serif;font-weight:700;">'+escH(i.custName)+'</td>'
-        +'<td style="font-family:Arial,sans-serif;font-size:11px;">'+escH(i.invNo)+'</td>'
-        +'<td>'+pb1+' '+pb2+'</td>'
-        +'<td style="font-family:Arial,sans-serif;font-weight:700;color:#2e7d32;">+'+fmt(i.total)+'</td>'
-        +'</tr>';
-    });
-
-    (day.purchases||[]).forEach(function(p){
-      rows += '<tr style="background:#e3f2fd;">'
-        +'<td><span style="font-size:9px;background:#1565c0;color:#fff;padding:1px 5px;">BUY</span></td>'
-        +'<td style="font-family:Arial,sans-serif;font-weight:700;">'+escH(p.supplier||'-')+'</td>'
-        +'<td style="font-family:Arial,sans-serif;font-size:11px;">'+escH(p.item)+'</td>'
-        +'<td><span class="pay-badge '+(p.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(p.payMode||'Cash')+'</span></td>'
-        +'<td style="font-family:Arial,sans-serif;font-weight:700;color:#1565c0;">-'+fmt(p.totalCost)+'</td>'
-        +'</tr>';
-    });
-
-    (day.expenses||[]).forEach(function(e){
-      rows += '<tr style="background:#fff3e0;">'
-        +'<td><span style="font-size:9px;background:#c0392b;color:#fff;padding:1px 5px;">EXP</span></td>'
-        +'<td style="font-family:Arial,sans-serif;font-weight:700;">'+escH(e.category)+'</td>'
-        +'<td style="font-family:Arial,sans-serif;font-size:11px;">'+(e.desc&&e.desc!==e.category?escH(e.desc):'-')+'</td>'
-        +'<td><span class="pay-badge '+(e.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(e.payMode||'Cash')+'</span></td>'
-        +'<td style="font-family:Arial,sans-serif;font-weight:700;color:#c0392b;">-'+fmt(e.amount)+'</td>'
-        +'</tr>';
-    });
-
-    h += '<div style="margin-bottom:8px;">'
-      +'<div class="fold-head" data-fid="'+did+'" style="display:flex;align-items:center;gap:6px;padding:9px 11px;background:var(--ow);border:1px solid var(--bdr);cursor:pointer;">'
-      +'<span style="font-weight:700;font-size:12px;font-family:Arial,sans-serif;flex:1;">'+date+'</span>'
-      +(dayIn?'<span style="font-size:10px;color:#2e7d32;font-weight:700;">In:'+fmt(dayIn)+'</span>':'')
-      +(dayPur?'<span style="font-size:10px;color:#1565c0;font-weight:700;">Buy:'+fmt(dayPur)+'</span>':'')
-      +(dayExp?'<span style="font-size:10px;color:#c0392b;font-weight:700;">Exp:'+fmt(dayExp)+'</span>':'')
-      +'<span style="font-size:10px;font-weight:700;color:'+netCol+';">Net:'+fmt(dayNet)+'</span>'
-      +'<span class="arrow" style="font-size:10px;">+</span></div>'
-      +'<div id="'+did+'" style="display:none;overflow-x:auto;">'
-      +'<table class="tbl"><thead><tr><th>Type</th><th>Name</th><th>Details</th><th>Mode/Status</th><th>Amount</th></tr></thead>'
-      +'<tbody>'+rows+'</tbody></table></div></div>';
+  // Group dates by month
+  var mg = {};
+  Object.keys(dg).forEach(function(date){
+    var mk = monthKey(date) || 'Unknown';
+    if(!mg[mk]) mg[mk] = {};
+    mg[mk][date] = dg[date];
   });
+
+  // Sort months descending
+  var sortedMonths = Object.keys(mg).sort(function(a,b){
+    var da=new Date(a+'-01'), db=new Date(b+'-01');
+    if(!isNaN(da)&&!isNaN(db)) return db-da;
+    return b.localeCompare(a);
+  });
+
+  var h = '';
+  sortedMonths.forEach(function(month){
+    var monthDates = mg[month];
+    var monthIn=0, monthPur=0, monthExp=0;
+    Object.keys(monthDates).forEach(function(d){
+      var day=monthDates[d];
+      (day.sales||[]).forEach(function(i){
+        if(i.payStatus==='Pending') return;
+        if(i.payMode==='Split') monthIn += (i.cashAmt||0)+(i.upiAmt||0);
+        else if(i.payStatus==='Paid') monthIn += i.total;
+      });
+      monthPur += (day.purchases||[]).reduce(function(s,p){return s+p.totalCost;},0);
+      monthExp += (day.expenses||[]).reduce(function(s,e){return s+e.amount;},0);
+    });
+    var monthNet = monthIn - monthPur - monthExp;
+    var monthNetCol = monthNet >= 0 ? '#2e7d32' : '#c0392b';
+    var mid = 'pmf'+month.replace(/[^a-zA-Z0-9]/g,'');
+    var monthLabel = month;
+    try { var mp=new Date(month+'-01'); if(!isNaN(mp)) monthLabel=mp.toLocaleDateString('en-IN',{month:'long',year:'numeric'}); } catch(ex){}
+
+    var dhtml = '';
+    Object.keys(monthDates).sort(function(a,b){return b.localeCompare(a);}).forEach(function(date){
+      var day = monthDates[date];
+      var dayIn = (day.sales||[]).reduce(function(s,i){
+        if(i.payStatus==='Pending') return s;
+        if(i.payMode==='Split') return s+(i.cashAmt||0)+(i.upiAmt||0);
+        if(i.payStatus==='Paid') return s+i.total;
+        return s;
+      },0);
+      var dayPur = (day.purchases||[]).reduce(function(s,p){return s+p.totalCost;},0);
+      var dayExp = (day.expenses||[]).reduce(function(s,e){return s+e.amount;},0);
+      var dayNet = dayIn - dayPur - dayExp;
+      var netCol = dayNet >= 0 ? '#2e7d32' : '#c0392b';
+      var did = 'pf'+date.replace(/[^a-zA-Z0-9]/g,'');
+      var dateLabel = date;
+      try { var dp=new Date(date); if(!isNaN(dp)) dateLabel=dp.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); } catch(ex){}
+      var rows = '';
+
+      (day.sales||[]).forEach(function(i){
+        var pb1='<span class="pay-badge '+(i.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(i.payMode)+'</span>';
+        var pb2='<span class="pay-badge '+(i.payStatus==='Paid'?'pay-paid':i.payStatus==='Partial'?'pay-partial':'pay-pending')+'">'+escH(i.payStatus)+'</span>';
+        rows+='<tr style="background:#f0fff4;"><td><span style="font-size:9px;background:#2e7d32;color:#fff;padding:1px 5px;">SALE</span></td><td style="font-family:Arial,sans-serif;font-weight:700;">'+escH(i.custName)+'</td><td style="font-family:Arial,sans-serif;font-size:11px;">'+escH(i.invNo)+'</td><td>'+pb1+' '+pb2+'</td><td style="font-family:Arial,sans-serif;font-weight:700;color:#2e7d32;">+'+fmt(i.total)+'</td></tr>';
+      });
+      (day.purchases||[]).forEach(function(p){
+        rows+='<tr style="background:#e3f2fd;"><td><span style="font-size:9px;background:#1565c0;color:#fff;padding:1px 5px;">BUY</span></td><td style="font-family:Arial,sans-serif;font-weight:700;">'+escH(p.supplier||'-')+'</td><td style="font-family:Arial,sans-serif;font-size:11px;">'+escH(p.item)+'</td><td><span class="pay-badge '+(p.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(p.payMode||'Cash')+'</span></td><td style="font-family:Arial,sans-serif;font-weight:700;color:#1565c0;">-'+fmt(p.totalCost)+'</td></tr>';
+      });
+      (day.expenses||[]).forEach(function(e){
+        rows+='<tr style="background:#fff3e0;"><td><span style="font-size:9px;background:#c0392b;color:#fff;padding:1px 5px;">EXP</span></td><td style="font-family:Arial,sans-serif;font-weight:700;">'+escH(e.category)+'</td><td style="font-family:Arial,sans-serif;font-size:11px;">'+(e.desc&&e.desc!==e.category?escH(e.desc):'-')+'</td><td><span class="pay-badge '+(e.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(e.payMode||'Cash')+'</span></td><td style="font-family:Arial,sans-serif;font-weight:700;color:#c0392b;">-'+fmt(e.amount)+'</td></tr>';
+      });
+
+      dhtml+='<div><div class="fold-head" data-fid="'+did+'" style="display:flex;align-items:center;gap:6px;padding:8px 12px 8px 24px;cursor:pointer;background:var(--w);border-bottom:1px solid var(--bdr);">'
+        +'<span style="font-size:13px;">📅</span>'
+        +'<span style="font-weight:600;font-size:12px;font-family:Arial,sans-serif;flex:1;color:#333;">'+dateLabel+'</span>'
+        +(dayIn?'<span style="font-size:10px;color:#2e7d32;font-weight:700;">In:'+fmt(dayIn)+'</span>':'')
+        +(dayPur?'<span style="font-size:10px;color:#1565c0;font-weight:700;margin-left:4px;">Buy:'+fmt(dayPur)+'</span>':'')
+        +(dayExp?'<span style="font-size:10px;color:#c0392b;font-weight:700;margin-left:4px;">Exp:'+fmt(dayExp)+'</span>':'')
+        +'<span style="font-size:10px;font-weight:700;color:'+netCol+';margin-left:4px;">Net:'+fmt(dayNet)+'</span>'
+        +'<span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div>'
+        +'<div id="'+did+'" style="display:none;overflow-x:auto;">'
+        +'<table class="tbl"><thead><tr><th>Type</th><th>Name</th><th>Details</th><th>Mode/Status</th><th>Amount</th></tr></thead>'
+        +'<tbody>'+rows+'</tbody></table></div></div>';
+    });
+
+    h+='<div style="margin-bottom:8px;">'
+      +'<div class="fold-head" data-fid="'+mid+'" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--ow);border:1px solid var(--bdr);cursor:pointer;">'
+      +'<span style="font-size:16px;">📁</span>'
+      +'<span style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;color:var(--gd);flex:1;">'+monthLabel+'</span>'
+      +(monthIn?'<span style="font-size:10px;color:#2e7d32;font-weight:700;">In:'+fmt(monthIn)+'</span>':'')
+      +(monthPur?'<span style="font-size:10px;color:#1565c0;font-weight:700;margin-left:4px;">Buy:'+fmt(monthPur)+'</span>':'')
+      +(monthExp?'<span style="font-size:10px;color:#c0392b;font-weight:700;margin-left:4px;">Exp:'+fmt(monthExp)+'</span>':'')
+      +'<span style="font-size:10px;font-weight:700;color:'+monthNetCol+';margin-left:4px;">Net:'+fmt(monthNet)+'</span>'
+      +'<span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div>'
+      +'<div id="'+mid+'" style="display:none;border:1px solid var(--bdr);border-top:none;">'+dhtml+'</div></div>';
+  });
+
   pl.innerHTML = h;
   pl.onclick = function(e){
     var fh = e.target.closest('.fold-head');
@@ -3192,8 +3222,47 @@ function renderSalesReport(){
   var daily={};
   filtered.forEach(function(i){var d=i.invDate||'';if(!daily[d])daily[d]={total:0,count:0};daily[d].total+=i.total;daily[d].count++;});
   var sd=Object.keys(daily).sort(function(a,b){return b.localeCompare(a);});
+  // Daily - month → date folder structure
   var srd=document.getElementById('sr-daily');
-  if(srd)srd.innerHTML=sd.length?'<table class="tbl"><thead><tr><th>Date</th><th>Invoices</th><th>Total</th></tr></thead><tbody>'+sd.slice(0,30).map(function(d){return '<tr><td style="font-family:Arial,sans-serif;">'+d+'</td><td>'+daily[d].count+'</td><td style="font-weight:700;color:var(--gd2);">'+fmt(daily[d].total)+'</td></tr>';}).join('')+'</tbody></table>':'<div style="color:var(--mu);text-align:center;padding:20px;">No data</div>';
+  if(srd){
+    if(!sd.length){
+      srd.innerHTML='<div style="color:var(--mu);text-align:center;padding:20px;">No data</div>';
+    } else {
+      // Group by month
+      var smg={};
+      sd.forEach(function(d){
+        var mk=monthKey(d)||'Unknown';
+        if(!smg[mk]) smg[mk]=[];
+        smg[mk].push(d);
+      });
+      var sMths=Object.keys(smg).sort(function(a,b){var da=new Date(a+'-01'),db=new Date(b+'-01');if(!isNaN(da)&&!isNaN(db))return db-da;return b.localeCompare(a);});
+      var srhtml='';
+      sMths.forEach(function(month){
+        var mid='srmf'+month.replace(/[^a-zA-Z0-9]/g,'');
+        var monthLabel=month;
+        try{var mp=new Date(month+'-01');if(!isNaN(mp))monthLabel=mp.toLocaleDateString('en-IN',{month:'long',year:'numeric'});}catch(ex){}
+        var mTotal=smg[month].reduce(function(s,d){return s+daily[d].total;},0);
+        var mCount=smg[month].reduce(function(s,d){return s+daily[d].count;},0);
+        var dhtml='';
+        smg[month].forEach(function(d){
+          var did='srdf'+d.replace(/[^a-zA-Z0-9]/g,'');
+          var dateLabel=d;
+          try{var dp=new Date(d);if(!isNaN(dp))dateLabel=dp.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}catch(ex){}
+          // Per-day invoices
+          var dayInvs=filtered.filter(function(i){return i.invDate===d;});
+          var ihtml=dayInvs.map(function(inv){
+            var pb1='<span class="pay-badge '+(inv.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(inv.payMode)+'</span>';
+            var pb2='<span class="pay-badge '+(inv.payStatus==='Paid'?'pay-paid':inv.payStatus==='Partial'?'pay-partial':'pay-pending')+'">'+escH(inv.payStatus)+'</span>';
+            return '<div style="border-bottom:1px solid var(--bdr);background:#fff;"><div style="padding:8px 12px 4px 36px;display:flex;justify-content:space-between;"><div><div style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;">'+escH(inv.custName)+'</div><div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">'+escH(inv.invNo)+'</div><div>'+pb1+' '+pb2+'</div></div><div style="text-align:right;font-weight:700;font-size:16px;color:var(--gd2);font-family:Arial,sans-serif;">'+fmt(inv.total)+'</div></div></div>';
+          }).join('');
+          dhtml+='<div><div class="fold-head" data-fid="'+did+'" style="display:flex;align-items:center;gap:8px;padding:8px 12px 8px 24px;cursor:pointer;background:var(--w);border-bottom:1px solid var(--bdr);"><span style="font-size:13px;">📅</span><span style="font-weight:600;font-size:12px;font-family:Arial,sans-serif;flex:1;color:#333;">'+dateLabel+'</span><span style="font-size:10px;color:var(--mu);">'+daily[d].count+' inv | '+fmt(daily[d].total)+'</span><span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div><div id="'+did+'" style="display:none;">'+ihtml+'</div></div>';
+        });
+        srhtml+='<div style="margin-bottom:8px;"><div class="fold-head" data-fid="'+mid+'" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--ow);border:1px solid var(--bdr);cursor:pointer;"><span style="font-size:16px;">📁</span><span style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;color:var(--gd);flex:1;">'+monthLabel+'</span><span style="font-size:10px;color:var(--mu);">'+mCount+' inv | '+fmt(mTotal)+'</span><span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div><div id="'+mid+'" style="display:none;border:1px solid var(--bdr);border-top:none;">'+dhtml+'</div></div>';
+      });
+      srd.innerHTML=srhtml;
+      srd.onclick=function(e){var fh=e.target.closest('.fold-head');if(fh)toggleFolder(fh.getAttribute('data-fid'));};
+    }
+  }
   var monthly={};
   invoices.forEach(function(i){var mk=monthKey(i.invDate)||'';if(!monthly[mk])monthly[mk]={total:0,count:0};monthly[mk].total+=i.total;monthly[mk].count++;});
   var srm2=document.getElementById('sr-monthly');
@@ -3628,30 +3697,46 @@ function renderInvReport() {
     }
   }
 
-  // Movement log table
+  // Movement log - month → date folder structure
   var movEl = document.getElementById('ir-movlog');
   if (movEl) {
     if (!logs.length) {
       movEl.innerHTML = '<div style="text-align:center;color:#999;padding:20px;font-family:Arial,sans-serif;">No movement in this period</div>';
     } else {
-      var mrows = logs.slice().reverse().map(function(m, idx) {
-        var isIn = m.type === 'IN';
-        return '<tr style="border-bottom:1px solid #f0ede8;'+(idx%2===1?'background:#fafaf9;':'')+'">'+
-          '<td style="padding:8px 10px;font-size:11px;color:#666;">'+m.date+'</td>'+
-          '<td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px;background:'+(isIn?'#e8f5e9':'#ffebee')+';color:'+(isIn?'#1b5e20':'#b71c1c')+';">'+m.type+'</span></td>'+
-          '<td style="padding:8px 10px;font-weight:600;font-size:12px;">'+m.item+'</td>'+
-          '<td style="padding:8px 10px;text-align:center;font-weight:700;color:'+(isIn?'#2e7d32':'#c0392b')+';font-size:13px;">'+(isIn?'+':'-')+m.qty+'</td>'+
-          '<td style="padding:8px 10px;font-size:11px;color:#555;">'+m.ref+'</td>'+
-          '</tr>';
-      }).join('');
-      movEl.innerHTML = '<table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;">'+
-        '<thead><tr style="background:linear-gradient(90deg,#2d3a42,#37474f);color:#fff;">'+
-        '<th style="padding:9px 10px;text-align:left;">Date</th>'+
-        '<th style="padding:9px 10px;text-align:left;">Type</th>'+
-        '<th style="padding:9px 10px;text-align:left;">Item</th>'+
-        '<th style="padding:9px 10px;text-align:center;">Qty</th>'+
-        '<th style="padding:9px 10px;text-align:left;">Reference</th>'+
-        '</tr></thead><tbody>'+mrows+'</tbody></table>';
+      // Group by month → date
+      var mg={};
+      logs.slice().reverse().forEach(function(m){
+        var mk=monthKey(m.date)||'Unknown', dk=m.date||'Unknown';
+        if(!mg[mk]) mg[mk]={};
+        if(!mg[mk][dk]) mg[mk][dk]=[];
+        mg[mk][dk].push(m);
+      });
+      var sortedMonths=Object.keys(mg).sort(function(a,b){var da=new Date(a+'-01'),db=new Date(b+'-01');if(!isNaN(da)&&!isNaN(db))return db-da;return b.localeCompare(a);});
+      var mhtml='';
+      sortedMonths.forEach(function(month){
+        var mid='imf'+month.replace(/[^a-zA-Z0-9]/g,'');
+        var monthLabel=month;
+        try{var mp=new Date(month+'-01');if(!isNaN(mp))monthLabel=mp.toLocaleDateString('en-IN',{month:'long',year:'numeric'});}catch(ex){}
+        var mIn=0,mOut=0;
+        Object.keys(mg[month]).forEach(function(d){mg[month][d].forEach(function(m){if(m.type==='IN')mIn+=m.qty;else mOut+=m.qty;});});
+        var dhtml='';
+        Object.keys(mg[month]).sort(function(a,b){return b.localeCompare(a);}).forEach(function(date){
+          var entries=mg[month][date];
+          var did='imd'+date.replace(/[^a-zA-Z0-9]/g,'');
+          var dateLabel=date;
+          try{var dp=new Date(date);if(!isNaN(dp))dateLabel=dp.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}catch(ex){}
+          var dIn=entries.filter(function(m){return m.type==='IN';}).reduce(function(s,m){return s+m.qty;},0);
+          var dOut=entries.filter(function(m){return m.type==='OUT';}).reduce(function(s,m){return s+m.qty;},0);
+          var rows=entries.map(function(m,idx){
+            var isIn=m.type==='IN';
+            return '<tr style="border-bottom:1px solid #f0ede8;'+(idx%2===1?'background:#fafaf9;':'')+'"><td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 8px;font-size:10px;font-weight:700;letter-spacing:1px;background:'+(isIn?'#e8f5e9':'#ffebee')+';color:'+(isIn?'#1b5e20':'#b71c1c')+';">'+m.type+'</span></td><td style="padding:8px 10px;font-weight:600;font-size:12px;">'+m.item+'</td><td style="padding:8px 10px;text-align:center;font-weight:700;color:'+(isIn?'#2e7d32':'#c0392b')+';font-size:13px;">'+(isIn?'+':'-')+m.qty+'</td><td style="padding:8px 10px;font-size:11px;color:#555;">'+m.ref+'</td></tr>';
+          }).join('');
+          dhtml+='<div><div class="fold-head" data-fid="'+did+'" style="display:flex;align-items:center;gap:8px;padding:8px 12px 8px 24px;cursor:pointer;background:#fff;border-bottom:1px solid #f0ede8;"><span style="font-size:13px;">📅</span><span style="font-weight:600;font-size:12px;font-family:Arial,sans-serif;flex:1;color:#333;">'+dateLabel+'</span><span style="font-size:10px;color:#2e7d32;font-weight:700;">+'+dIn+'</span><span style="font-size:10px;color:#c0392b;font-weight:700;margin-left:4px;">-'+dOut+'</span><span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div><div id="'+did+'" style="display:none;overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;"><thead><tr style="background:linear-gradient(90deg,#2d3a42,#37474f);color:#fff;"><th style="padding:8px 10px;text-align:left;">Type</th><th style="padding:8px 10px;text-align:left;">Item</th><th style="padding:8px 10px;text-align:center;">Qty</th><th style="padding:8px 10px;text-align:left;">Reference</th></tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+        });
+        mhtml+='<div style="margin-bottom:8px;"><div class="fold-head" data-fid="'+mid+'" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--ow);border:1px solid var(--bdr);cursor:pointer;"><span style="font-size:16px;">📁</span><span style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;color:var(--gd);flex:1;">'+monthLabel+'</span><span style="font-size:10px;color:#2e7d32;font-weight:700;">IN:'+mIn+'</span><span style="font-size:10px;color:#c0392b;font-weight:700;margin-left:6px;">OUT:'+mOut+'</span><span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div><div id="'+mid+'" style="display:none;border:1px solid var(--bdr);border-top:none;">'+dhtml+'</div></div>';
+      });
+      movEl.innerHTML=mhtml;
+      movEl.onclick=function(e){var fh=e.target.closest('.fold-head');if(fh)toggleFolder(fh.getAttribute('data-fid'));};
     }
   }
 }
@@ -4337,41 +4422,48 @@ function renderPendingReceipts(){
     list.innerHTML='<div style="text-align:center;padding:40px;color:var(--mu);font-family:Arial,sans-serif;">No payment receipts yet.</div>';
     return;
   }
-  var h='';
+  // Group by month → date
+  var mg={};
   pendingPayments.forEach(function(r){
-    // Live remaining from invoice — more accurate than stored r.remainingAmt
-    var liveInv = invoices.find(function(i){return i.invNo===r.invNo;});
-    var liveRemaining = liveInv ? Math.max(0, liveInv.total - (liveInv.paidAmount||0)) : (r.remainingAmt||0);
-    var isSplit = (r.payMode==='Split');
-    var modeBadge = isSplit
-      ? '<span class="pay-badge pay-cash">Cash</span> <span class="pay-badge pay-upi">UPI</span>'
-      : '<span class="pay-badge '+(r.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(r.payMode)+'</span>';
-    var splitLine = isSplit
-      ? '<div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;margin-top:2px;">C: '+fmt(r.cashAmt||0)+' + U: '+fmt(r.upiAmt||0)+'</div>'
-      : '';
-    var isToday = (r.date === todayDate);
-    var editBtn = isToday ? '<button class="btn btn-gold" style="padding:4px 9px;font-size:9px;" data-action="editr" data-rid="'+r.id+'">✏️ Edit</button>' : '';
-    var delBtn = isStaff ? '' : '<button class="btn btn-red" style="padding:4px 9px;font-size:9px;" data-action="delr" data-rid="'+r.id+'">Delete</button>';
-    h+='<div style="padding:12px 14px;border-bottom:1px solid var(--bdr);background:#fff;">'
-      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
-      +'<div><div style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;">'+escH(r.custName)+'</div>'
-      +'<div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">'+escH(r.receiptNo)+' | '+r.date+'</div>'
-      +'<div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">Invoice: '+escH(r.invNo)+'</div>'
-      +'<div style="margin-top:3px;">'+modeBadge+'</div>'+splitLine+'</div>'
-      +'<div style="text-align:right;">'
-      +'<div style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;color:#2e7d32;">'+fmt(r.paidAmt)+'</div>'
-      +(liveRemaining>0?'<div style="font-size:10px;color:#e65100;font-family:Arial,sans-serif;">Bal: '+fmt(liveRemaining)+'</div>':'<div style="font-size:10px;color:#1b5e20;font-weight:700;font-family:Arial,sans-serif;">✓ Paid Full</div>')
-      +'</div></div>'
-      +'<div style="display:flex;gap:5px;flex-wrap:wrap;">'
-      +'<button class="btn btn-outline" style="padding:4px 9px;font-size:9px;" data-action="viewr" data-rid="'+r.id+'">View</button>'
-      +'<button class="btn btn-wa" style="padding:4px 9px;font-size:9px;" data-action="wappr" data-rid="'+r.id+'">📲 WA</button>'
-      +'<button class="btn btn-green" style="padding:4px 9px;font-size:9px;" data-action="dlreceipt" data-rid="'+r.id+'">⬇ PDF</button>'
-      +editBtn
-      +delBtn
-      +'</div></div>';
+    var mk=monthKey(r.date)||'Unknown', dk=r.date||'Unknown';
+    if(!mg[mk]) mg[mk]={};
+    if(!mg[mk][dk]) mg[mk][dk]=[];
+    mg[mk][dk].push(r);
+  });
+  var sortedMonths=Object.keys(mg).sort(function(a,b){var da=new Date(a+'-01'),db=new Date(b+'-01');if(!isNaN(da)&&!isNaN(db))return db-da;return b.localeCompare(a);});
+  var h='';
+  sortedMonths.forEach(function(month){
+    var monthTotal=0;
+    Object.keys(mg[month]).forEach(function(d){mg[month][d].forEach(function(r){monthTotal+=r.paidAmt||0;});});
+    var mid='prf'+month.replace(/[^a-zA-Z0-9]/g,'');
+    var monthLabel=month;
+    try{var mp=new Date(month+'-01');if(!isNaN(mp))monthLabel=mp.toLocaleDateString('en-IN',{month:'long',year:'numeric'});}catch(ex){}
+    var dhtml='';
+    Object.keys(mg[month]).sort(function(a,b){return b.localeCompare(a);}).forEach(function(date){
+      var recs=mg[month][date], dayTotal=recs.reduce(function(s,r){return s+(r.paidAmt||0);},0);
+      var did='prd'+date.replace(/[^a-zA-Z0-9]/g,'');
+      var dateLabel=date;
+      try{var dp=new Date(date);if(!isNaN(dp))dateLabel=dp.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});}catch(ex){}
+      var ihtml='';
+      recs.forEach(function(r){
+        var liveInv=invoices.find(function(i){return i.invNo===r.invNo;});
+        var liveRemaining=liveInv?Math.max(0,liveInv.total-(liveInv.paidAmount||0)):(r.remainingAmt||0);
+        var isSplit=(r.payMode==='Split');
+        var modeBadge=isSplit?'<span class="pay-badge pay-cash">Cash</span> <span class="pay-badge pay-upi">UPI</span>':'<span class="pay-badge '+(r.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(r.payMode)+'</span>';
+        var splitLine=isSplit?'<div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;margin-top:2px;">C: '+fmt(r.cashAmt||0)+' + U: '+fmt(r.upiAmt||0)+'</div>':'';
+        var isToday=(r.date===todayDate);
+        var editBtn=isToday?'<button class="btn btn-gold" style="padding:4px 9px;font-size:9px;" data-action="editr" data-rid="'+r.id+'">✏️ Edit</button>':'';
+        var delBtn=isStaff?'':'<button class="btn btn-red" style="padding:4px 9px;font-size:9px;" data-action="delr" data-rid="'+r.id+'">Delete</button>';
+        ihtml+='<div style="border-bottom:1px solid var(--bdr);background:#fff;"><div style="padding:10px 14px 6px 36px;display:flex;justify-content:space-between;align-items:flex-start;"><div><div style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;">'+escH(r.custName)+'</div><div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">'+escH(r.receiptNo)+'</div><div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">Invoice: '+escH(r.invNo)+'</div><div style="margin-top:3px;">'+modeBadge+'</div>'+splitLine+'</div><div style="text-align:right;"><div style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;color:#2e7d32;">'+fmt(r.paidAmt)+'</div>'+(liveRemaining>0?'<div style="font-size:10px;color:#e65100;font-family:Arial,sans-serif;">Bal: '+fmt(liveRemaining)+'</div>':'<div style="font-size:10px;color:#1b5e20;font-weight:700;font-family:Arial,sans-serif;">✓ Paid Full</div>')+'</div></div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:0 14px 8px 36px;"><button class="btn btn-outline" style="padding:4px 9px;font-size:9px;" data-action="viewr" data-rid="'+r.id+'">View</button><button class="btn btn-wa" style="padding:4px 9px;font-size:9px;" data-action="wappr" data-rid="'+r.id+'">📲 WA</button><button class="btn btn-green" style="padding:4px 9px;font-size:9px;" data-action="dlreceipt" data-rid="'+r.id+'">⬇ PDF</button>'+editBtn+delBtn+'</div></div>';
+      });
+      dhtml+='<div><div class="fold-head" data-fid="'+did+'" style="display:flex;align-items:center;gap:8px;padding:8px 12px 8px 24px;cursor:pointer;background:var(--w);border-bottom:1px solid var(--bdr);"><span style="font-size:13px;">📅</span><span style="font-weight:600;font-size:12px;font-family:Arial,sans-serif;flex:1;color:#333;">'+dateLabel+'</span><span style="font-size:10px;color:var(--mu);">'+recs.length+' | '+fmt(dayTotal)+'</span><span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div><div id="'+did+'" style="display:none;">'+ihtml+'</div></div>';
+    });
+    h+='<div style="margin-bottom:8px;"><div class="fold-head" data-fid="'+mid+'" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--ow);border:1px solid var(--bdr);cursor:pointer;"><span style="font-size:16px;">📁</span><span style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;color:var(--gd);flex:1;">'+monthLabel+'</span><span style="font-size:10px;color:var(--mu);">'+fmt(monthTotal)+'</span><span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div><div id="'+mid+'" style="display:none;border:1px solid var(--bdr);border-top:none;">'+dhtml+'</div></div>';
   });
   list.innerHTML=h;
   list.onclick=function(e){
+    var fh=e.target.closest('.fold-head');
+    if(fh){toggleFolder(fh.getAttribute('data-fid'));return;}
     var btn=e.target.closest('button[data-action]');
     if(btn){
       var act=btn.getAttribute('data-action'), id=parseInt(btn.getAttribute('data-rid'));
