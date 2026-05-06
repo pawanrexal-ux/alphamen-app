@@ -5782,11 +5782,13 @@ function renderPurchases(){
     var dg = mg[month], mi = [];
     Object.keys(dg).forEach(function(k){ dg[k].forEach(function(p){ mi.push(p); }); });
     var mt = mi.reduce(function(s,p){ return s+p.totalCost; }, 0);
-    var mid = 'pmf'+month.replace(/[^a-zA-Z0-9]/g,'');
+    var mid = 'purmf'+month.replace(/[^a-zA-Z0-9]/g,'');
     var dhtml = '';
     Object.keys(dg).sort(function(a,b){ return b.localeCompare(a); }).forEach(function(date){
       var ps2 = dg[date], dt = ps2.reduce(function(s,p){ return s+p.totalCost; }, 0);
-      var did = 'pdf'+date.replace(/[^a-zA-Z0-9]/g,'');
+      var did = 'purdf'+date.replace(/[^a-zA-Z0-9]/g,'');
+      var dateLabel = date;
+      try { var dp=new Date(date); if(!isNaN(dp)) dateLabel=dp.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); } catch(ex){}
       var rows = '';
       ps2.forEach(function(p){
         rows += '<tr>' +
@@ -5802,16 +5804,18 @@ function renderPurchases(){
       });
       dhtml += '<div>' +
         '<div class="fold-head" data-fid="'+did+'" style="display:flex;align-items:center;gap:8px;padding:8px 12px 8px 24px;cursor:pointer;background:var(--w);border-bottom:1px solid var(--bdr);">' +
-        '<span style="font-weight:500;font-size:12px;font-family:Arial,sans-serif;flex:1;">'+date+'</span>' +
+        '<span style="font-weight:500;font-size:12px;font-family:Arial,sans-serif;flex:1;">'+dateLabel+'</span>' +
         '<span style="font-size:10px;color:var(--mu);">'+ps2.length+' items | '+fmt(dt)+'</span>' +
         '<span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div>' +
         '<div id="'+did+'" style="display:none;overflow-x:auto;">' +
         '<table class="tbl"><thead><tr><th>Item</th><th>Supplier</th><th>Qty</th><th>Rate</th><th>Freight</th><th>Total</th><th>Notes</th><th></th></tr></thead>' +
         '<tbody>'+rows+'</tbody></table></div></div>';
     });
+    var monthLabel = month;
+    try { var mp=new Date(month+' 1'); if(!isNaN(mp)) monthLabel=mp.toLocaleDateString('en-IN',{month:'long',year:'numeric'}); } catch(ex){}
     html += '<div style="margin-bottom:8px;">' +
       '<div class="fold-head" data-fid="'+mid+'" style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--ow);border:1px solid var(--bdr);cursor:pointer;">' +
-      '<span style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;color:var(--gd);flex:1;">'+month+'</span>' +
+      '<span style="font-size:16px;">📁</span><span style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;color:var(--gd);flex:1;">'+monthLabel+'</span>' +
       '<span style="font-size:10px;color:var(--mu);">'+mi.length+' entries | '+fmt(mt)+'</span>' +
       '<span class="arrow" style="font-size:10px;margin-left:6px;">+</span></div>' +
       '<div id="'+mid+'" style="display:none;border:1px solid var(--bdr);border-top:none;">'+dhtml+'</div></div>';
