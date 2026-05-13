@@ -3335,43 +3335,74 @@ function renderPayments(){
   var filtReceipts  = pendingPayments.filter(function(r){ return (!selMonth || monthKey(r.date)===selMonth) && inPeriod(r.date||''); });
 
   // ============ CALCULATE TOTALS ============
-  // Invoice IN (cash collected from sales)
+  // FORMULA (aap ke hisab se):
+  //   Revenue       = sum of all invoice totals (regardless of payment status)
+  //   Collected     = invoice.paidAmount (directly paid on invoice) + receipt.paidAmt (baad mein collected)
+  //   Pending       = Revenue - Collected (jo abhi bhi baaki hai)
+  //
+  // Invoice paidAmount field:
+  //   Paid    → paidAmount = invoice.total
+  //   Partial → paidAmount = jo invoice pe direct mila (receipt se aaya is mein NAHI hai)
+  //   Pending → paidAmount = 0
+  //
+  // Receipt paidAmt = baad mein collect hua (purani pending/partial invoices ka)
+  // Dono milake = total collected. No double counting.
+
+  // ── Revenue: sum of all invoice totals ──
+  var totalRevenue = filtInvoices.reduce(function(s,i){ return s+i.total; },0);
+
+  // ── Invoice directly paid amount (Cash/UPI breakdown) ──
   var invCashIn=0, invUpiIn=0, invBankIn=0;
   filtInvoices.forEach(function(inv){
-    if(inv.payStatus==='Pending') return;
-    var received = inv.payStatus==='Partial' ? (inv.paidAmount||0) : inv.total;
-    if(received<=0) return;
-    if(inv.payMode==='Cash') invCashIn += received;
-    else if(inv.payMode==='UPI') invUpiIn += received;
-    else if(inv.payMode==='Bank') invBankIn += received;
+    // paidAmount = jo invoice ke waqt directly collect hua
+    var paid = inv.paidAmount || 0;
+    if(paid <= 0) return;
+    if(inv.payMode==='Cash') invCashIn += paid;
+    else if(inv.payMode==='UPI') invUpiIn += paid;
+    else if(inv.payMode==='Bank') invBankIn += paid;
     else if(inv.payMode==='Split'){
-      invCashIn += (inv.cashAmt||0);
-      invUpiIn  += (inv.upiAmt||0);
+      var st = (inv.cashAmt||0) + (inv.upiAmt||0);
+      if(st > 0){
+        invCashIn += paid * ((inv.cashAmt||0)/st);
+        invUpiIn  += paid * ((inv.upiAmt||0)/st);
+      } else {
+        invCashIn += paid;
+      }
     }
   });
-  // Receipt IN (pending payment collected)
+
+  // ── Receipt paid amount (baad mein collect hua) ──
   var recCashIn=0, recUpiIn=0;
+  var recTotal = 0;
   filtReceipts.forEach(function(r){
-    if(r.payMode==='Cash') recCashIn += (r.paidAmt||0);
-    else if(r.payMode==='UPI'||r.payMode==='Bank') recUpiIn += (r.paidAmt||0);
+    var amt = r.paidAmt||0;
+    recTotal += amt;
+    if(r.payMode==='Cash') recCashIn += amt;
+    else if(r.payMode==='UPI'||r.payMode==='Bank') recUpiIn += amt;
     else if(r.payMode==='Split'){ recCashIn += (r.cashAmt||0); recUpiIn += (r.upiAmt||0); }
   });
 
+  // ── Totals ──
   var totalCashIn  = invCashIn + recCashIn;
-  var totalUpiIn   = invUpiIn + recUpiIn;
+  var totalUpiIn   = invUpiIn  + recUpiIn;
   var totalBankIn  = invBankIn;
-  var totalIn      = totalCashIn + totalUpiIn + totalBankIn;
-  var pendAmt      = filtInvoices.filter(function(i){return i.payStatus==='Pending'||i.payStatus==='Partial';}).reduce(function(s,i){return s+(i.total-(i.paidAmount||0));},0);
-  var purTotal     = filtPurchases.reduce(function(s,p){return s+p.totalCost;},0);
-  var expTotal     = filtExpenses.reduce(function(s,e){return s+e.amount;},0);
-  var totalOut     = purTotal + expTotal;
-  var netTotal     = totalIn - totalOut;
-  var totalRevenue = filtInvoices.reduce(function(s,i){return s+i.total;},0);
-  // Today's total revenue (always from today's invoices regardless of filter)
-  var todayRevenue = invoices.filter(function(i){ return i.invDate === todayStr; }).reduce(function(s,i){ return s+i.total; },0);
-  // Label and amount for Invoiced Amount box
-  var invoicedLabel = selPeriod==='daily' ? 'Today\'s Revenue' : (selPeriod==='weekly' ? 'Week Revenue' : 'Invoiced Amount');
+  var totalIn      = totalCashIn + totalUpiIn + totalBankIn; // = invoice paidAmount + receipt paidAmt
+
+  // Pending = jo abhi collect nahi hua
+  var pendAmt = filtInvoices.reduce(function(s,i){
+    return s + Math.max(0, i.total - (i.paidAmount||0));
+  },0) - recTotal; // receipts ne kuch pending reduce kiya hoga
+  pendAmt = Math.max(0, pendAmt);
+
+  var purTotal  = filtPurchases.reduce(function(s,p){return s+p.totalCost;},0);
+  var expTotal  = filtExpenses.reduce(function(s,e){return s+e.amount;},0);
+  var totalOut  = purTotal + expTotal;
+  var netTotal  = totalIn - totalOut;
+
+  // Box labels
+  var invoicedLabel = selPeriod==='daily' ? 'Today\'s Revenue' : (selPeriod==='weekly' ? 'Week Revenue' : 'Sales (Invoiced)');
   var invoicedAmt   = totalRevenue;
+  var todayRevenue  = invoices.filter(function(i){ return i.invDate===todayStr; }).reduce(function(s,i){return s+i.total;},0);
 
   // ============ RENDER IN/OUT SUMMARY ============
   var nc = netTotal>=0 ? '#1b5e20' : '#b71c1c';
@@ -3381,9 +3412,9 @@ function renderPayments(){
       // Big IN / OUT / NET row
       '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">'
       +'<div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);color:#fff;padding:12px 10px;border-radius:3px;text-align:center;">'
-        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">💰 Total IN</div>'
+        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">💰 Collected</div>'
         +'<div style="font-size:20px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(totalIn)+'</div>'
-        +'<div style="font-size:9px;opacity:.75;margin-top:3px;">Invoice + Receipts</div>'
+        +'<div style="font-size:9px;opacity:.75;margin-top:3px;">Invoice paid + Receipts</div>'
       +'</div>'
       +'<div style="background:linear-gradient(135deg,#7f0000,#c0392b);color:#fff;padding:12px 10px;border-radius:3px;text-align:center;">'
         +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">💸 Total OUT</div>'
@@ -3398,9 +3429,10 @@ function renderPayments(){
       +'</div>'
       // Detail breakdown
       +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;margin-bottom:8px;">'
-      +'<div style="background:#e8f5e9;border:1.5px solid #66bb6a;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#2e7d32;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;font-weight:700;">📋 '+invoicedLabel+'</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#1b5e20;font-family:Arial,sans-serif;">'+fmt(invoicedAmt)+'</div>'
+      +'<div style="background:#fffde7;border:1.5px solid #f9a825;padding:9px 8px;text-align:center;border-radius:2px;">'
+        +'<div style="font-size:8px;color:#f57f17;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;font-weight:700;">📋 '+invoicedLabel+'</div>'
+        +'<div style="font-size:14px;font-weight:700;color:#e65100;font-family:Arial,sans-serif;">'+fmt(invoicedAmt)+'</div>'
+        +'<div style="font-size:9px;color:#888;margin-top:2px;">Inv: '+fmt(totalIn-recTotal)+' + Rec: '+fmt(recTotal)+'</div>'
       +'</div>'
       +'<div style="background:#e8f5e9;border:1px solid #a5d6a7;padding:9px 8px;text-align:center;border-radius:2px;">'
         +'<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">💵 Cash IN</div>'
