@@ -3351,48 +3351,63 @@ function renderPayments(){
   // ── Revenue: sum of all invoice totals ──
   var totalRevenue = filtInvoices.reduce(function(s,i){ return s+i.total; },0);
 
-  // ── Invoice directly paid amount (Cash/UPI breakdown) ──
-  var invCashIn=0, invUpiIn=0, invBankIn=0;
+  // ── Cash / UPI breakdown ──
+  // inv.paidAmount = original invoice payment + baad ke saare receipts (savePendingPayment update karta hai)
+  // Isliye: invoice original paid = inv.paidAmount - us invoice ke saare receipts
+  // Phir receipts alag se add karo mode-wise
+
+  // Step 1: Har invoice ke liye ALL-TIME receipts ka total (paidAmount correction ke liye)
+  var allReceiptByInv = {}; // invNo -> {total, cash, upi}
+  pendingPayments.forEach(function(r){
+    if(!r.invNo) return;
+    if(!allReceiptByInv[r.invNo]) allReceiptByInv[r.invNo] = {total:0, cash:0, upi:0};
+    var amt = r.paidAmt || 0;
+    allReceiptByInv[r.invNo].total += amt;
+    if(r.payMode === 'Cash') allReceiptByInv[r.invNo].cash += amt;
+    else if(r.payMode === 'UPI' || r.payMode === 'Bank') allReceiptByInv[r.invNo].upi += amt;
+    else if(r.payMode === 'Split'){ allReceiptByInv[r.invNo].cash += (r.cashAmt||0); allReceiptByInv[r.invNo].upi += (r.upiAmt||0); }
+  });
+
+  var totalCashIn = 0, totalUpiIn = 0, totalBankIn = 0;
+
+  // Step 2: Invoices se sirf ORIGINAL payment (receipts minus karke)
   filtInvoices.forEach(function(inv){
-    // paidAmount = jo invoice ke waqt directly collect hua
-    var paid = inv.paidAmount || 0;
-    if(paid <= 0) return;
-    if(inv.payMode==='Cash') invCashIn += paid;
-    else if(inv.payMode==='UPI') invUpiIn += paid;
-    else if(inv.payMode==='Bank') invBankIn += paid;
-    else if(inv.payMode==='Split'){
-      var st = (inv.cashAmt||0) + (inv.upiAmt||0);
-      if(st > 0){
-        invCashIn += paid * ((inv.cashAmt||0)/st);
-        invUpiIn  += paid * ((inv.upiAmt||0)/st);
+    if(inv.payStatus === 'Pending') return;
+    var recData = allReceiptByInv[inv.invNo] || {total:0, cash:0, upi:0};
+    var originalPaid = Math.max(0, (inv.paidAmount || 0) - recData.total);
+    if(originalPaid <= 0) return;
+    if(inv.payMode === 'Cash') totalCashIn += originalPaid;
+    else if(inv.payMode === 'UPI') totalUpiIn += originalPaid;
+    else if(inv.payMode === 'Bank') totalBankIn += originalPaid;
+    else if(inv.payMode === 'Split'){
+      // Split invoice mein cashAmt/upiAmt original split hai
+      var origTotal = (inv.cashAmt||0) + (inv.upiAmt||0);
+      if(origTotal > 0){
+        totalCashIn += originalPaid * ((inv.cashAmt||0) / origTotal);
+        totalUpiIn  += originalPaid * ((inv.upiAmt||0)  / origTotal);
       } else {
-        invCashIn += paid;
+        totalCashIn += originalPaid;
       }
     }
   });
 
-  // ── Receipt paid amount (baad mein collect hua) ──
-  var recCashIn=0, recUpiIn=0;
-  var recTotal = 0;
+  // Step 3: Filtered receipts alag se add karo mode-wise
   filtReceipts.forEach(function(r){
-    var amt = r.paidAmt||0;
-    recTotal += amt;
-    if(r.payMode==='Cash') recCashIn += amt;
-    else if(r.payMode==='UPI'||r.payMode==='Bank') recUpiIn += amt;
-    else if(r.payMode==='Split'){ recCashIn += (r.cashAmt||0); recUpiIn += (r.upiAmt||0); }
+    var amt = r.paidAmt || 0;
+    if(r.payMode === 'Cash') totalCashIn += amt;
+    else if(r.payMode === 'UPI' || r.payMode === 'Bank') totalUpiIn += amt;
+    else if(r.payMode === 'Split'){ totalCashIn += (r.cashAmt||0); totalUpiIn += (r.upiAmt||0); }
   });
 
-  // ── Totals ──
-  var totalCashIn  = invCashIn + recCashIn;
-  var totalUpiIn   = invUpiIn  + recUpiIn;
-  var totalBankIn  = invBankIn;
-  var totalIn      = totalCashIn + totalUpiIn + totalBankIn; // = invoice paidAmount + receipt paidAmt
-
-  // Pending = jo abhi collect nahi hua
+  // ── Pending = jo abhi collect nahi hua ──
   var pendAmt = filtInvoices.reduce(function(s,i){
+    if(i.payStatus==='Paid') return s;
     return s + Math.max(0, i.total - (i.paidAmount||0));
-  },0) - recTotal; // receipts ne kuch pending reduce kiya hoga
+  },0);
   pendAmt = Math.max(0, pendAmt);
+
+  // ── Collected = Revenue - Pending (simple formula) ──
+  var totalIn = Math.max(0, totalRevenue - pendAmt);
 
   var purTotal  = filtPurchases.reduce(function(s,p){return s+p.totalCost;},0);
   var expTotal  = filtExpenses.reduce(function(s,e){return s+e.amount;},0);
@@ -3405,58 +3420,25 @@ function renderPayments(){
   var todayRevenue  = invoices.filter(function(i){ return i.invDate===todayStr; }).reduce(function(s,i){return s+i.total;},0);
 
   // ============ RENDER IN/OUT SUMMARY ============
-  var nc = netTotal>=0 ? '#1b5e20' : '#b71c1c';
   var summary = document.getElementById('pay-inout-summary');
   if(summary){
     summary.innerHTML =
-      // Big IN / OUT / NET row
-      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">'
-      +'<div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);color:#fff;padding:12px 10px;border-radius:3px;text-align:center;">'
-        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">💰 Collected</div>'
-        +'<div style="font-size:20px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(totalIn)+'</div>'
-        +'<div style="font-size:9px;opacity:.75;margin-top:3px;">Invoice paid + Receipts</div>'
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">'
+      +'<div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);color:#fff;padding:14px 10px;border-radius:3px;text-align:center;">'
+        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">💰 Total IN</div>'
+        +'<div style="font-size:22px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(totalIn)+'</div>'
       +'</div>'
-      +'<div style="background:linear-gradient(135deg,#7f0000,#c0392b);color:#fff;padding:12px 10px;border-radius:3px;text-align:center;">'
+      +'<div style="background:linear-gradient(135deg,#7f0000,#c0392b);color:#fff;padding:14px 10px;border-radius:3px;text-align:center;">'
         +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">💸 Total OUT</div>'
-        +'<div style="font-size:20px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(totalOut)+'</div>'
-        +'<div style="font-size:9px;opacity:.75;margin-top:3px;">Purchase + Expense</div>'
+        +'<div style="font-size:22px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(totalOut)+'</div>'
       +'</div>'
-      +'<div style="background:linear-gradient(135deg,'+(netTotal>=0?'#0d47a1,#1565c0':'#880e4f,#c2185b')+');color:#fff;padding:12px 10px;border-radius:3px;text-align:center;">'
-        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">📊 NET</div>'
-        +'<div style="font-size:20px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(netTotal)+'</div>'
-        +'<div style="font-size:9px;opacity:.75;margin-top:3px;">IN - OUT</div>'
+      +'<div style="background:linear-gradient(135deg,'+(netTotal>=0?'#0d47a1,#1565c0':'#880e4f,#c2185b')+');color:#fff;padding:14px 10px;border-radius:3px;text-align:center;">'
+        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">📊 Net Balance</div>'
+        +'<div style="font-size:22px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(netTotal)+'</div>'
       +'</div>'
-      +'</div>'
-      // Detail breakdown
-      +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;margin-bottom:8px;">'
-      +'<div style="background:#fffde7;border:1.5px solid #f9a825;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#f57f17;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;font-weight:700;">📋 '+invoicedLabel+'</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#e65100;font-family:Arial,sans-serif;">'+fmt(invoicedAmt)+'</div>'
-        +'<div style="font-size:9px;color:#888;margin-top:2px;">Inv: '+fmt(totalIn-recTotal)+' + Rec: '+fmt(recTotal)+'</div>'
-      +'</div>'
-      +'<div style="background:#e8f5e9;border:1px solid #a5d6a7;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">💵 Cash IN</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#2e7d32;font-family:Arial,sans-serif;">'+fmt(totalCashIn)+'</div>'
-      +'</div>'
-      +'<div style="background:#e8f2fe;border:1px solid #aecdf5;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">📱 UPI IN</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#1553a0;font-family:Arial,sans-serif;">'+fmt(totalUpiIn)+'</div>'
-      +'</div>'
-      +(totalBankIn>0?'<div style="background:#ede7f6;border:1px solid #c5b4e3;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">🏦 Bank IN</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#4527a0;font-family:Arial,sans-serif;">'+fmt(totalBankIn)+'</div>'
-      +'</div>':'')
-      +'<div style="background:#fff3e0;border:2px solid #ffd4a0;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#c45e00;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;font-weight:700;">⏳ Pending</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#c45e00;font-family:Arial,sans-serif;">'+fmt(pendAmt)+'</div>'
-      +'</div>'
-      +'<div style="background:#ffeaea;border:1px solid #ffcdd2;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">🛒 Purchase</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#c0392b;font-family:Arial,sans-serif;">'+fmt(purTotal)+'</div>'
-      +'</div>'
-      +'<div style="background:#ffeaea;border:1px solid #ffcdd2;padding:9px 8px;text-align:center;border-radius:2px;">'
-        +'<div style="font-size:8px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px;">💸 Expense</div>'
-        +'<div style="font-size:14px;font-weight:700;color:#c0392b;font-family:Arial,sans-serif;">'+fmt(expTotal)+'</div>'
+      +'<div style="background:linear-gradient(135deg,#e65100,#f57c00);color:#fff;padding:14px 10px;border-radius:3px;text-align:center;">'
+        +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;opacity:.8;margin-bottom:4px;">🧾 Total Sale</div>'
+        +'<div style="font-size:22px;font-weight:700;font-family:Arial,sans-serif;">'+fmt(totalRevenue)+'</div>'
       +'</div>'
       +'</div>';
   }
