@@ -1638,7 +1638,7 @@ var _IDB_ENGINE = (function() {
   }
 
   open();
-  return { set:set, getSync:getSync, del:del, loadAll:loadAll, estimateUsage:estimateUsage, cache: _cache };
+  return { set:set, getSync:getSync, del:del, loadAll:loadAll, estimateUsage:estimateUsage, cache: _cache, isReady: function(){ return _ready; } };
 })();
 
 // ── Legacy IDB shim — keeps any code that calls IDB.set / IDB.del / IDB.getSync working ──
@@ -1753,6 +1753,14 @@ var _lastPushTime = 0;
 var PUSH_MIN_GAP = 3000; // minimum 3s between Firebase writes
 
 function schedulePush(){
+  // ── IDB READY GUARD ──
+  // Startup pe LS.sync() calls aa sakti hain IDB load se pehle.
+  // Agar IDB ready nahi hai, push silently skip karo —
+  // startup pull baad mein data sync kar dega.
+  if(!_IDB_ENGINE.isReady()){
+    console.warn('[schedulePush] IDB not ready — push skipped');
+    return;
+  }
   if(_pushDebounceTimer) clearTimeout(_pushDebounceTimer);
   _pushDebounceTimer = setTimeout(function(){
     _pushDebounceTimer = null;
@@ -1809,6 +1817,24 @@ function schedSync(){
 async function pushCloud(){
   var fbUrl = getFirebaseUrl();
   if(!SYNC_KEY || !fbUrl){ setSyncDot('offline'); return; }
+
+  // ── IDB READY GUARD ──
+  // Agar IDB cache abhi load nahi hua (startup race condition),
+  // to push cancel karo — Firebase mein empty data jayega.
+  if(!_IDB_ENGINE.isReady()){
+    console.warn('[Sync] IDB cache not ready yet — push cancelled to prevent data loss');
+    return;
+  }
+
+  // ── EMPTY DATA GUARD ──
+  // Agar invoices aur stockItems dono empty hain lekin IDB cache mein
+  // keys hain, to yeh boot-time race condition hai — push mat karo.
+  var idbKeyCount = Object.keys(_IDB_ENGINE.cache).length;
+  var inMemoryEmpty = (!invoices.length && !stockItems.length);
+  if(inMemoryEmpty && idbKeyCount > 0){
+    console.warn('[Sync] In-memory arrays empty but IDB has ' + idbKeyCount + ' keys — race condition, push cancelled');
+    return;
+  }
 
   // Build complete payload — ALL data keys included
   var payload = {
@@ -5007,7 +5033,20 @@ function initApp(){
   pendingPayments = LS.get('pendingPayments') || [];
   expenses = LS.get('expenses') || [];
   FIREBASE_URL = getFirebaseUrl();
-  if(SYNC_KEY && getFirebaseUrl()) setTimeout(function(){setSyncDot('syncing');pullCloud();},1000);
+  // ── STARTUP PULL DELAY ──
+  // 2500ms delay: IDB loadAll() finishes before this but in-memory arrays
+  // (invoices, stockItems etc.) are assigned from LS.get() above.
+  // Extra buffer prevents any micro-task ordering issue.
+  if(SYNC_KEY && getFirebaseUrl()) setTimeout(function(){
+    // Double-check IDB is ready before pulling
+    if(!_IDB_ENGINE.isReady()){
+      console.warn('[Boot] IDB still not ready at pull time — delaying further');
+      setTimeout(function(){ setSyncDot('syncing'); pullCloud(); }, 2000);
+      return;
+    }
+    setSyncDot('syncing');
+    pullCloud();
+  }, 2500);
   else if(SYNC_KEY) setSyncDot('offline');
   setInterval(updSS,30000);
   setInterval(checkDateChange,60000);
