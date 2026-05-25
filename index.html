@@ -660,8 +660,6 @@ input[type=tel], textarea, select {
       <div class="nav-sec">Collections &#128178;</div>
       <div class="nav-item" onclick="navTo('payments',this)"><span class="nav-icon">&#128179;</span>Payments Ledger</div>
       <div class="nav-item" onclick="navTo('pending',this)"><span class="nav-icon">&#9203;</span>Pending Dues</div>
-      <div class="nav-item" onclick="navTo('pendingnew',this)"><span class="nav-icon">&#10133;</span>New Payment Receipt</div>
-      <div class="nav-item" onclick="navTo('pendingreceipts',this)"><span class="nav-icon">&#128203;</span>Payment Receipts</div>
       <div class="nav-sec">Purchase</div>
       <div class="nav-item" onclick="navTo('purchases',this)"><span class="nav-icon">&#128666;</span>Purchase Dashboard</div>
       <div class="nav-item" onclick="navTo('purchaselist',this)"><span class="nav-icon">&#128203;</span>Purchase Records</div>
@@ -676,7 +674,6 @@ input[type=tel], textarea, select {
       <div class="nav-sec">Expenses</div>
       <div class="nav-item" onclick="navTo('expenses',this)"><span class="nav-icon">&#128181;</span>Expense Dashboard</div>
       <div class="nav-item" onclick="navTo('expensenew',this)"><span class="nav-icon">&#10133;</span>Add Expense</div>
-      <div class="nav-item" onclick="navTo('expenselist',this)"><span class="nav-icon">&#128203;</span>Expense Records</div>
       <div class="nav-sec">System</div>
       <div class="nav-item" onclick="navTo('settings',this)"><span class="nav-icon">&#9881;</span>Settings</div>
     </nav>
@@ -1015,6 +1012,7 @@ input[type=tel], textarea, select {
 
       <!-- PAYMENT RECEIPTS LIST -->
       <div class="page" id="page-pendingreceipts">
+        <div class="stats-grid" id="pend-receipts-stats" style="margin-bottom:12px;"></div>
         <div id="staff-receipts-notice" style="display:none;background:#e8f5e9;border:1px solid #a5d6a7;padding:8px 12px;margin-bottom:10px;font-size:11px;font-family:Arial,sans-serif;color:#2e7d32;border-radius:2px;">
           💳 <strong>Staff Access:</strong> Receipts view, WhatsApp share aur PDF download kar sakte ho.
         </div>
@@ -5587,14 +5585,18 @@ function renderPendingDashboard(){
   });
   var totalPending = pendInvs.reduce(function(s,i){ return s+(i.total-(i.paidAmount||0)); }, 0);
   var totalInvAmt = pendInvs.reduce(function(s,i){ return s+i.total; }, 0);
-  var totalCollected = pendingPayments.reduce(function(s,r){ return s+r.paidAmt; }, 0);
+  // Staff ko sirf is month ka collected amount dikhao; admin ko all-time
+  var _curMonth = (function(){ var n=new Date(); return n.getFullYear()+'-'+(String(n.getMonth()+1).padStart(2,'0')); })();
+  var totalCollected = (CURRENT_ROLE==='staff')
+    ? pendingPayments.filter(function(r){ return (r.date||'').slice(0,7)===_curMonth; }).reduce(function(s,r){ return s+(r.paidAmt||0); }, 0)
+    : pendingPayments.reduce(function(s,r){ return s+(r.paidAmt||0); }, 0);
 
   var ps = document.getElementById('pend-dash-stats');
   if(ps) ps.innerHTML =
-    '<div class="stat-card red"><div class="stat-label">Total Pending</div><div class="stat-value" style="color:#e65100;">'+fmt(totalPending)+'</div><div class="stat-sub">'+pendInvs.length+' invoices</div></div>'+
-    '<div class="stat-card"><div class="stat-label">Total Invoice Amt</div><div class="stat-value">'+fmt(totalInvAmt)+'</div></div>'+
-    '<div class="stat-card gold"><div class="stat-label">Collected via Receipts</div><div class="stat-value" style="color:#2e7d32;">'+fmt(totalCollected)+'</div></div>'+
-    '<div class="stat-card"><div class="stat-label">Receipts Issued</div><div class="stat-value">'+pendingPayments.length+'</div></div>';
+    '<div class="stat-card red" onclick="" style="cursor:default;"><div class="stat-card-icon">⏳</div><div class="stat-label">Total Pending</div><div class="stat-value" style="color:#e65100;">'+fmt(totalPending)+'</div><div class="stat-sub">'+pendInvs.length+' invoices</div></div>'+
+    '<div class="stat-card" onclick="" style="cursor:default;"><div class="stat-card-icon">🧾</div><div class="stat-label">Total Invoice Amt</div><div class="stat-value">'+fmt(totalInvAmt)+'</div><div class="stat-sub">&nbsp;</div></div>'+
+    '<div class="stat-card gold" onclick="navTo(\'pendingreceipts\',null)" style="cursor:pointer;" title="Receipts dekho"><div class="stat-card-icon">💰</div><div class="stat-label">'+(CURRENT_ROLE==="staff"?"This Month Collected":"Collected via Receipts")+'</div><div class="stat-value" style="color:#2e7d32;">'+fmt(totalCollected)+'</div><div class="stat-sub">Tap to view &nbsp;›</div></div>'+
+    '<div class="stat-card" onclick="navTo(\'pendingreceipts\',null)" style="cursor:pointer;" title="Saare receipts dekho"><div class="stat-card-icon">📋</div><div class="stat-label">Receipts Issued</div><div class="stat-value">'+pendingPayments.length+'</div><div class="stat-sub">Tap to view &nbsp;›</div></div>';
 
   // Pending invoices list
   var pl = document.getElementById('pend-inv-list');
@@ -5625,12 +5627,28 @@ function renderPendingReceipts(){
   pendingPayments = LS.get('pendingPayments')||[];
   var isStaff = (CURRENT_ROLE === 'staff');
   var todayDate = nowDate();
+  var cm = monthKey(todayDate);
 
   // Staff notices
   var rNotice = document.getElementById('staff-receipts-notice');
   if(rNotice) rNotice.style.display = isStaff ? 'block' : 'none';
   var pExportBtn = document.getElementById('pend-export-btn');
   if(pExportBtn) pExportBtn.style.display = isStaff ? 'none' : '';
+
+  // Stat summary at top of receipts page
+  var rStats = document.getElementById('pend-receipts-stats');
+  if(rStats){
+    var todayTotal = pendingPayments.filter(function(r){return r.date===todayDate;}).reduce(function(s,r){return s+(r.paidAmt||0);},0);
+    var monthTotal = pendingPayments.filter(function(r){return (r.date||'').slice(0,7)===cm;}).reduce(function(s,r){return s+(r.paidAmt||0);},0);
+    var allTotal   = pendingPayments.reduce(function(s,r){return s+(r.paidAmt||0);},0);
+    var todayCount = pendingPayments.filter(function(r){return r.date===todayDate;}).length;
+    var monthCount = pendingPayments.filter(function(r){return (r.date||'').slice(0,7)===cm;}).length;
+    rStats.innerHTML =
+      '<div class="stat-card gold" onclick="scrollToReceiptMonth(\''+todayDate+'\')" style="cursor:pointer;" title="Aaj ke receipts"><div class="stat-card-icon">📅</div><div class="stat-label">Today Collected</div><div class="stat-value" style="color:#2e7d32;">'+fmt(todayTotal)+'</div><div class="stat-sub">'+todayCount+' receipts &nbsp;›</div></div>'+
+      '<div class="stat-card gold" onclick="scrollToReceiptMonth(\''+cm+'\')" style="cursor:pointer;" title="Is mahine ke receipts"><div class="stat-card-icon">📈</div><div class="stat-label">This Month</div><div class="stat-value" style="color:#2e7d32;">'+fmt(monthTotal)+'</div><div class="stat-sub">'+monthCount+' receipts &nbsp;›</div></div>'+
+      '<div class="stat-card" style="cursor:default;"><div class="stat-card-icon">💰</div><div class="stat-label">All Time</div><div class="stat-value">'+fmt(allTotal)+'</div><div class="stat-sub">'+pendingPayments.length+' total</div></div>'+
+      '<div class="stat-card" onclick="navTo(\'pendingnew\',null)" style="cursor:pointer;"><div class="stat-card-icon">➕</div><div class="stat-label">New Receipt</div><div class="stat-value" style="font-size:28px;">+</div><div class="stat-sub">add &nbsp;›</div></div>';
+  }
 
   var list = document.getElementById('pend-receipts-list');
   if(!list) return;
@@ -5677,7 +5695,7 @@ function renderPendingReceipts(){
         var modeBadge=isSplit?'<span class="pay-badge pay-cash">Cash</span> <span class="pay-badge pay-upi">UPI</span>':'<span class="pay-badge '+(r.payMode==='Cash'?'pay-cash':'pay-upi')+'">'+escH(r.payMode)+'</span>';
         var splitLine=isSplit?'<div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;margin-top:2px;">C: '+fmt(r.cashAmt||0)+' + U: '+fmt(r.upiAmt||0)+'</div>':'';
         var isToday=(r.date===todayDate);
-        var editBtn=isToday?'<button class="btn btn-gold" style="padding:4px 9px;font-size:9px;" data-action="editr" data-rid="'+r.id+'">✏️ Edit</button>':'';
+        var editBtn=(CURRENT_ROLE==='admin' || isToday)?'<button class="btn btn-gold" style="padding:4px 9px;font-size:9px;" data-action="editr" data-rid="'+r.id+'">✏️ Edit</button>':'';
         var delBtn=isStaff?'':'<button class="btn btn-red" style="padding:4px 9px;font-size:9px;" data-action="delr" data-rid="'+r.id+'">Delete</button>';
         ihtml+='<div style="border-bottom:1px solid var(--bdr);background:#fff;"><div style="padding:10px 14px 6px 36px;display:flex;justify-content:space-between;align-items:flex-start;"><div><div style="font-weight:700;font-size:13px;font-family:Arial,sans-serif;">'+escH(r.custName)+'</div><div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">'+escH(r.receiptNo)+'</div><div style="font-size:10px;color:var(--mu);font-family:Arial,sans-serif;">Invoice: '+escH(r.invNo)+'</div><div style="margin-top:3px;">'+modeBadge+'</div>'+splitLine+'</div><div style="text-align:right;"><div style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;color:#2e7d32;">'+fmt(r.paidAmt)+'</div>'+(liveRemaining>0?'<div style="font-size:10px;color:#e65100;font-family:Arial,sans-serif;">Bal: '+fmt(liveRemaining)+'</div>':'<div style="font-size:10px;color:#1b5e20;font-weight:700;font-family:Arial,sans-serif;">✓ Paid Full</div>')+'</div></div><div style="display:flex;gap:5px;flex-wrap:wrap;padding:0 14px 8px 36px;"><button class="btn btn-outline" style="padding:4px 9px;font-size:9px;" data-action="viewr" data-rid="'+r.id+'">View</button><button class="btn btn-wa" style="padding:4px 9px;font-size:9px;" data-action="wappr" data-rid="'+r.id+'">📲 WA</button><button class="btn btn-green" style="padding:4px 9px;font-size:9px;" data-action="dlreceipt" data-rid="'+r.id+'">⬇ PDF</button>'+editBtn+delBtn+'</div></div>';
       });
@@ -5699,6 +5717,43 @@ function renderPendingReceipts(){
       else if(act==='editr') editReceipt(id);
     }
   };
+}
+
+function scrollToReceiptMonth(dateOrMonth){
+  // dateOrMonth: full date (YYYY-MM-DD) for today, or month key (YYYY-MM) for month
+  var isFullDate = dateOrMonth && dateOrMonth.length === 10;
+  var targetMonth = isFullDate ? dateOrMonth.slice(0,7) : dateOrMonth;
+  var mid = 'prf' + targetMonth.replace(/[^a-zA-Z0-9]/g,'');
+  var mEl = document.getElementById(mid);
+  if(mEl){
+    // Open the month accordion
+    if(mEl.style.display === 'none' || mEl.style.display === ''){
+      mEl.style.display = 'block';
+      var mHead = document.querySelector('[data-fid="'+mid+'"] .arrow');
+      if(mHead) mHead.textContent = '▼';
+    }
+    // If full date, also open that date's accordion
+    if(isFullDate){
+      var did = 'prd' + dateOrMonth.replace(/[^a-zA-Z0-9]/g,'');
+      var dEl = document.getElementById(did);
+      if(dEl){
+        dEl.style.display = 'block';
+        var dHead = document.querySelector('[data-fid="'+did+'"] .arrow');
+        if(dHead) dHead.textContent = '▼';
+      }
+      setTimeout(function(){
+        var el = document.getElementById(did) || mEl;
+        if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+      }, 100);
+    } else {
+      setTimeout(function(){
+        if(mEl) mEl.scrollIntoView({behavior:'smooth', block:'start'});
+      }, 100);
+    }
+  } else {
+    // Month not found in list - show toast
+    showToast('No receipts found for this period');
+  }
 }
 
 function viewReceipt(id){
@@ -5781,7 +5836,7 @@ function downloadReceiptPDFById(id){
 function editReceipt(id){
   var r = pendingPayments.find(function(p){ return p.id===id; });
   if(!r){ showToast('Receipt not found'); return; }
-  if(r.date !== nowDate()){ showToast('⛔ Sirf aaj ke receipts edit ho sakte hain'); return; }
+  if(CURRENT_ROLE !== 'admin' && r.date !== nowDate()){ showToast('⛔ Sirf aaj ke receipts edit ho sakte hain'); return; }
   // Reverse the invoice payment that was applied
   var inv = invoices.find(function(i){ return i.invNo===r.invNo; });
   if(inv){
@@ -5957,10 +6012,10 @@ function renderExpenseDashboard(){
   // Stats
   var ds = document.getElementById('exp-dash-stats');
   if(ds) ds.innerHTML =
-    '<div class="stat-card red"><div class="stat-label">Today Expenses</div><div class="stat-value" style="color:#c0392b;">'+fmt(todayAmt)+'</div><div class="stat-sub">'+todayExp.length+' entries</div></div>'+
-    '<div class="stat-card red"><div class="stat-label">This Month</div><div class="stat-value" style="color:#c0392b;">'+fmt(monthAmt)+'</div><div class="stat-sub">'+monthExp.length+' entries</div></div>'+
-    '<div class="stat-card gold"><div class="stat-label">Largest Expense</div><div class="stat-value">'+fmt(monthExp.length ? Math.max.apply(null, monthExp.map(function(e){return e.amount;})) : 0)+'</div></div>'+
-    '<div class="stat-card"><div class="stat-label">Categories Used</div><div class="stat-value">'+[...new Set(monthExp.map(function(e){return e.category;}))].length+'</div></div>';
+    '<div class="stat-card red" onclick="navTo(\'expenselist\',null);setTimeout(function(){var el=document.getElementById(\'exp-period-filter\');if(el){el.value=\'today\';toggleExpPeriod();}},100);" style="cursor:pointer;" title="Aaj ke expenses dekho"><div class="stat-card-icon">📅</div><div class="stat-label">Today Expenses</div><div class="stat-value" style="color:#c0392b;">'+fmt(todayAmt)+'</div><div class="stat-sub">'+todayExp.length+' entries &nbsp;›</div></div>'+
+    '<div class="stat-card red" onclick="navTo(\'expenselist\',null);setTimeout(function(){var el=document.getElementById(\'exp-period-filter\');if(el){el.value=\'month\';toggleExpPeriod();}setTimeout(function(){var em=document.getElementById(\'exp-month\');if(em){em.value=monthKey(nowDate());renderExpenses();}},50);},100);" style="cursor:pointer;" title="Is mahine ke expenses dekho"><div class="stat-card-icon">📈</div><div class="stat-label">This Month</div><div class="stat-value" style="color:#c0392b;">'+fmt(monthAmt)+'</div><div class="stat-sub">'+monthExp.length+' entries &nbsp;›</div></div>'+
+    '<div class="stat-card gold" onclick="navTo(\'expenselist\',null)" style="cursor:pointer;" title="Sabse bada expense dekho"><div class="stat-card-icon">💸</div><div class="stat-label">Largest Expense</div><div class="stat-value">'+fmt(monthExp.length ? Math.max.apply(null, monthExp.map(function(e){return e.amount;})) : 0)+'</div><div class="stat-sub">this month &nbsp;›</div></div>'+
+    '<div class="stat-card" onclick="navTo(\'expensenew\',null)" style="cursor:pointer;" title="Naya expense add karo"><div class="stat-card-icon">➕</div><div class="stat-label">Add Expense</div><div class="stat-value">'+[...new Set(monthExp.map(function(e){return e.category;}))].length+'</div><div class="stat-sub">categories &nbsp;›</div></div>';
 
   // Category breakdown for this month
   var catBox = document.getElementById('exp-cat-breakdown');
@@ -7713,10 +7768,10 @@ function renderPurchaseDashboard(){
 
   var ps = document.getElementById('pur-dash-stats');
   if(ps) ps.innerHTML =
-    '<div class="stat-card"><div class="stat-label">Today Purchase</div><div class="stat-value" style="color:#1565c0;">'+fmt(todayAmt)+'</div><div class="stat-sub">'+todayP.length+' items</div></div>' +
-    '<div class="stat-card"><div class="stat-label">This Month</div><div class="stat-value" style="color:#1565c0;">'+fmt(monthAmt)+'</div><div class="stat-sub">'+monthP.length+' items</div></div>' +
-    '<div class="stat-card gold"><div class="stat-label">Today Qty</div><div class="stat-value">'+fmtN(todayQty)+'</div></div>' +
-    '<div class="stat-card"><div class="stat-label">Month Qty</div><div class="stat-value">'+fmtN(monthQty)+'</div></div>';
+    '<div class="stat-card" onclick="navTo(\'purchaselist\',null);setTimeout(function(){var el=document.getElementById(\'pur-month\');if(el){el.value=\'\';renderPurchases();}},100);" style="cursor:pointer;" title="Aaj ki purchases dekho"><div class="stat-card-icon">🚚</div><div class="stat-label">Today Purchase</div><div class="stat-value" style="color:#1565c0;">'+fmt(todayAmt)+'</div><div class="stat-sub">'+todayP.length+' items &nbsp;›</div></div>' +
+    '<div class="stat-card" onclick="navTo(\'purchaselist\',null);setTimeout(function(){var el=document.getElementById(\'pur-month\');if(el){el.value=monthKey(nowDate());renderPurchases();}},100);" style="cursor:pointer;" title="Is mahine ki purchases dekho"><div class="stat-card-icon">📈</div><div class="stat-label">This Month</div><div class="stat-value" style="color:#1565c0;">'+fmt(monthAmt)+'</div><div class="stat-sub">'+monthP.length+' items &nbsp;›</div></div>' +
+    '<div class="stat-card gold" onclick="navTo(\'purchaselist\',null)" style="cursor:pointer;" title="Purchase records dekho"><div class="stat-card-icon">📦</div><div class="stat-label">Today Qty</div><div class="stat-value">'+fmtN(todayQty)+'</div><div class="stat-sub">pieces &nbsp;›</div></div>' +
+    '<div class="stat-card" onclick="navTo(\'purchaselist\',null)" style="cursor:pointer;" title="Is mahine ki qty"><div class="stat-card-icon">📊</div><div class="stat-label">Month Qty</div><div class="stat-value">'+fmtN(monthQty)+'</div><div class="stat-sub">pieces &nbsp;›</div></div>';
 
   // Today list
   var dt = document.getElementById('pur-dash-today');
@@ -7936,18 +7991,18 @@ function renderPnL(){
   if(kpiGrid){
     var cards = [
       {label:'Total Revenue', val:fmtNum(totalSales), color:'#1b5e20', bg:'#e8f5e9', icon:'💰', nav:null, tip:''},
-      {label:'Purchase Cost', val:fmtNum(totalPurchases), color:'#e65100', bg:'#fff3e0', icon:'🛒', nav:'purchaselist', tip:'Double tap → Purchase Records'},
-      {label:'Total Expenses', val:fmtNum(totalExpenses), color:'#b71c1c', bg:'#ffeaea', icon:'💸', nav:'expenselist', tip:'Double tap → Expense Records'},
+      {label:'Purchase Cost', val:fmtNum(totalPurchases), color:'#e65100', bg:'#fff3e0', icon:'🛒', nav:'purchaselist', tip:'Tap → Purchase Records'},
+      {label:'Total Expenses', val:fmtNum(totalExpenses), color:'#b71c1c', bg:'#ffeaea', icon:'💸', nav:'expenselist', tip:'Tap → Expense Records'},
       {label:'Gross Profit', val:fmtNum(grossProfit), color:grossProfit>=0?'#1565c0':'#c62828', bg:grossProfit>=0?'#e3f2fd':'#ffeaea', icon:'📊', nav:null, tip:''},
       {label:'Net Profit', val:fmtNum(netProfit), color:netProfit>=0?'#2e7d32':'#c62828', bg:netProfit>=0?'#e8f5e9':'#ffeaea', icon:netProfit>=0?'📈':'📉', nav:null, tip:''},
       {label:'Net Margin', val:fmtPct(netMargin), color:netMargin>=0?'#1b5e20':'#b71c1c', bg:netMargin>=0?'#f1f8e9':'#ffeaea', icon:'🎯', nav:null, tip:''},
-      {label:'Invoices', val:filtInv.length, color:'#4a148c', bg:'#f3e5f5', icon:'🧾', nav:'history', tip:'Double tap → Invoice History'},
-      {label:'Pending Dues', val:fmtNum(totalPending), color:'#bf360c', bg:'#fff8e1', icon:'⏳', nav:'pending', tip:'Double tap → Pending Payments'},
+      {label:'Invoices', val:filtInv.length, color:'#4a148c', bg:'#f3e5f5', icon:'🧾', nav:'history', tip:'Tap → Invoice History'},
+      {label:'Pending Dues', val:fmtNum(totalPending), color:'#bf360c', bg:'#fff8e1', icon:'⏳', nav:'pending', tip:'Tap → Pending Payments'},
     ];
     kpiGrid.innerHTML = cards.map(function(c){
-      var dblAttr = c.nav ? ' ondblclick="navTo(\''+c.nav+'\',null)" title="'+c.tip+'"' : '';
+      var dblAttr = c.nav ? ' onclick="navTo(\''+c.nav+'\',null)" title="'+c.tip+'"' : '';
       var cursor  = c.nav ? 'cursor:pointer;' : '';
-      var hint    = c.nav ? '<div style="font-size:8px;color:rgba(0,0,0,.3);margin-top:5px;letter-spacing:.5px;">⇥ double tap</div>' : '';
+      var hint    = c.nav ? '<div style="font-size:8px;color:rgba(0,0,0,.3);margin-top:5px;letter-spacing:.5px;">⇥ tap to open</div>' : '';
       return '<div style="background:'+c.bg+';border:1px solid rgba(0,0,0,.07);padding:13px 12px;position:relative;overflow:hidden;transition:transform .2s;'+cursor+'" onmouseover="this.style.transform=\'translateY(-2px)\'" onmouseout="this.style.transform=\'none\'"'+dblAttr+'>'
         +'<div style="font-size:18px;margin-bottom:4px;">'+c.icon+'</div>'
         +'<div style="font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#666;margin-bottom:5px;">'+c.label+'</div>'
