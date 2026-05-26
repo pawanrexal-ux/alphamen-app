@@ -1833,6 +1833,11 @@ async function pushStaffInvoices(){
       invoices: invoices,
       pendingPayments: pendingPayments,
       expenses: expenses,
+      stock: stockItems,
+      stockMovLog: stockMovLog,
+      customers: savedCustomers,
+      dailyReports: dailyReports,
+      monthlyReports: monthlyReports,
       ts: Date.now(),
       pushedBy: 'staff'
     };
@@ -1903,6 +1908,83 @@ async function pullAndMergeStaffData(){
         LS.setL('expenses', expenses);
         merged = true;
       }
+    }
+
+    // StockMovLog merge: staff ke OUT entries jo admin ke paas nahi hain
+    if(Array.isArray(sd.stockMovLog)){
+      var smlIds = new Set(stockMovLog.map(function(m){ return String(m.id); }));
+      var newSml = sd.stockMovLog.filter(function(m){ return !smlIds.has(String(m.id)); });
+      if(newSml.length > 0){
+        stockMovLog = stockMovLog.concat(newSml);
+        stockMovLog.sort(function(a,b){ return (b.date||'') < (a.date||'') ? -1 : 1; });
+        LS.setL('stockMovLog', stockMovLog);
+        merged = true;
+        console.log('[StaffSync] Merged ' + newSml.length + ' stock movement entries');
+      }
+    }
+
+    // Stock qty merge: staff ke naye invoices ke items admin ke stock se deduct karo
+    // Double-deduct protection: sirf wahi invoices process karo jo admin ke paas nahi thi
+    if(Array.isArray(sd.invoices) && newFromStaff.length > 0){
+      newFromStaff.forEach(function(inv){
+        if(!Array.isArray(inv.items)) return;
+        inv.items.forEach(function(item){
+          var si = stockItems.find(function(s){
+            return s.name.toLowerCase() === (item.name||'').toLowerCase();
+          });
+          if(si) si.qty = Math.max(0, si.qty - (item.qty||0));
+        });
+      });
+      LS.setL('stock', stockItems);
+      merged = true;
+      console.log('[StaffSync] Stock qty deducted for ' + newFromStaff.length + ' new staff invoices');
+    }
+
+    // Customers merge
+    if(Array.isArray(sd.customers)){
+      var custNames = new Set(savedCustomers.map(function(c){ return (c.name||'').toLowerCase(); }));
+      var newCusts = sd.customers.filter(function(c){ return !custNames.has((c.name||'').toLowerCase()); });
+      if(newCusts.length > 0){
+        savedCustomers = savedCustomers.concat(newCusts);
+        LS.setL('customers', savedCustomers);
+      }
+    }
+
+    // dailyReports merge: staff ke reports admin ke saath merge karo
+    if(sd.dailyReports && typeof sd.dailyReports === 'object'){
+      Object.keys(sd.dailyReports).forEach(function(dateKey){
+        if(!dailyReports[dateKey]){
+          dailyReports[dateKey] = sd.dailyReports[dateKey];
+          merged = true;
+        } else {
+          // Same date ka report dono ke paas hai — combine karo
+          var ar = dailyReports[dateKey];
+          var sr = sd.dailyReports[dateKey];
+          // Invoices merge (by id)
+          var existIds = new Set((ar.invoices||[]).map(function(i){ return i.id; }));
+          var newInvs = (sr.invoices||[]).filter(function(i){ return !existIds.has(i.id); });
+          if(newInvs.length > 0){
+            ar.invoices = (ar.invoices||[]).concat(newInvs);
+            ar.total = (ar.total||0) + newInvs.reduce(function(s,i){ return s+(i.total||0); }, 0);
+            ar.count = (ar.count||0) + newInvs.length;
+            ar.cash  = (ar.cash||0)  + newInvs.reduce(function(s,i){ return s+(i.cashAmt||0); }, 0);
+            ar.upi   = (ar.upi||0)   + newInvs.reduce(function(s,i){ return s+(i.upiAmt||0); }, 0);
+            merged = true;
+          }
+        }
+      });
+      if(merged) LS.setL('dailyReports', dailyReports);
+    }
+
+    // monthlyReports merge
+    if(sd.monthlyReports && typeof sd.monthlyReports === 'object'){
+      Object.keys(sd.monthlyReports).forEach(function(mKey){
+        if(!monthlyReports[mKey]){
+          monthlyReports[mKey] = sd.monthlyReports[mKey];
+        }
+        // Monthly reports are recalculated from invoices on admin side anyway — skip complex merge
+      });
+      LS.setL('monthlyReports', monthlyReports);
     }
 
     if(merged){
@@ -2341,7 +2423,7 @@ function saveDailyReport(date){
     else if(i.payMode==='Split'){ cash+=(i.cashAmt||0); upi+=(i.upiAmt||0); }
   });
   rpts[date] = {date:date, total:dayInvs.reduce(function(s,i){return s+i.total;},0), count:dayInvs.length, cash:cash, upi:upi, invoices:dayInvs, savedAt:new Date().toISOString()};
-  LS.setL('dailyReports', rpts);
+  LS.sync('dailyReports', rpts);
   dailyReports = rpts;
 }
 
@@ -2359,7 +2441,7 @@ function saveMonthlyReport(month){
     else if(i.payMode==='Split'){daily[d].cash+=(i.cashAmt||0);daily[d].upi+=(i.upiAmt||0);cash+=(i.cashAmt||0);upi+=(i.upiAmt||0);}
   });
   rpts[month] = {month:month, total:mInvs.reduce(function(s,i){return s+i.total;},0), count:mInvs.length, cash:cash, upi:upi, daily:daily, savedAt:new Date().toISOString()};
-  LS.setL('monthlyReports', rpts);
+  LS.sync('monthlyReports', rpts);
   monthlyReports = rpts;
 }
 
@@ -6043,29 +6125,113 @@ async function silentPull(){
     var d = await res.json();
     if(!d || d.syncKey !== SYNC_KEY) return;
     var changed = false;
-    if(Array.isArray(d.invoices) && JSON.stringify(d.invoices) !== JSON.stringify(invoices)){
-      invoices = d.invoices; LS.setL('invoices', invoices); changed = true;
+    var isStaffRole = (typeof CURRENT_ROLE !== 'undefined' && CURRENT_ROLE === 'staff');
+
+    if(Array.isArray(d.invoices)){
+      if(isStaffRole){
+        // Staff: cloud se aye invoices mein local-only records merge karo
+        var cloudInvIds = new Set(d.invoices.map(function(i){ return i.id; }));
+        var localOnlyInvs = invoices.filter(function(i){ return !cloudInvIds.has(i.id); });
+        var merged_invs = d.invoices.concat(localOnlyInvs);
+        merged_invs.sort(function(a,b){ return (b.savedAt||'') > (a.savedAt||'') ? 1 : -1; });
+        if(JSON.stringify(merged_invs) !== JSON.stringify(invoices)){
+          invoices = merged_invs; LS.setL('invoices', invoices); changed = true;
+        }
+      } else {
+        if(JSON.stringify(d.invoices) !== JSON.stringify(invoices)){
+          invoices = d.invoices; LS.setL('invoices', invoices); changed = true;
+        }
+      }
     }
-    if(Array.isArray(d.stock) && JSON.stringify(d.stock) !== JSON.stringify(stockItems)){
-      stockItems = d.stock; LS.setL('stock', stockItems); changed = true;
+
+    if(Array.isArray(d.stock)){
+      if(isStaffRole){
+        // Staff: cloud stock accept karo BUT local deductions jo cloud mein nahi hain woh preserve karo
+        // Strategy: cloud stock use karo as base, phir local-only invoice deductions re-apply karo
+        var cloudInvIds2 = new Set(d.invoices ? d.invoices.map(function(i){ return i.id; }) : []);
+        var localOnlyForStock = invoices.filter(function(i){ return !cloudInvIds2.has(i.id); });
+        var newStock = JSON.parse(JSON.stringify(d.stock)); // deep copy
+        localOnlyForStock.forEach(function(inv){
+          if(!Array.isArray(inv.items)) return;
+          inv.items.forEach(function(item){
+            var si = newStock.find(function(s){ return s.name.toLowerCase()===(item.name||'').toLowerCase(); });
+            if(si) si.qty = Math.max(0, si.qty - (item.qty||0));
+          });
+        });
+        if(JSON.stringify(newStock) !== JSON.stringify(stockItems)){
+          stockItems = newStock; LS.setL('stock', stockItems); changed = true;
+        }
+      } else {
+        if(JSON.stringify(d.stock) !== JSON.stringify(stockItems)){
+          stockItems = d.stock; LS.setL('stock', stockItems); changed = true;
+        }
+      }
     }
+
     if(d.settings && JSON.stringify(d.settings) !== JSON.stringify(SETTINGS)){
       SETTINGS = d.settings; LS.setL('settings', SETTINGS); changed = true;
     }
+
     if(Array.isArray(d.customers)){
-      savedCustomers = d.customers; LS.setL('customers', savedCustomers);
+      if(isStaffRole){
+        var cloudCustNames = new Set(d.customers.map(function(c){ return (c.name||'').toLowerCase(); }));
+        var localOnlyCusts = savedCustomers.filter(function(c){ return !cloudCustNames.has((c.name||'').toLowerCase()); });
+        savedCustomers = d.customers.concat(localOnlyCusts);
+        LS.setL('customers', savedCustomers);
+      } else {
+        savedCustomers = d.customers; LS.setL('customers', savedCustomers);
+      }
     }
+
     if(Array.isArray(d.purchases) && JSON.stringify(d.purchases) !== JSON.stringify(purchases)){
       purchases = d.purchases; LS.setL('purchases', purchases); changed = true;
     }
-    if(Array.isArray(d.pendingPayments) && JSON.stringify(d.pendingPayments) !== JSON.stringify(pendingPayments)){
-      pendingPayments = d.pendingPayments; LS.setL('pendingPayments', pendingPayments); changed = true;
+
+    if(Array.isArray(d.pendingPayments)){
+      if(isStaffRole){
+        var cloudPPIds = new Set(d.pendingPayments.map(function(r){ return r.id; }));
+        var localOnlyPP2 = pendingPayments.filter(function(r){ return !cloudPPIds.has(r.id); });
+        var merged_pp = d.pendingPayments.concat(localOnlyPP2);
+        merged_pp.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+        if(JSON.stringify(merged_pp) !== JSON.stringify(pendingPayments)){
+          pendingPayments = merged_pp; LS.setL('pendingPayments', pendingPayments); changed = true;
+        }
+      } else {
+        if(JSON.stringify(d.pendingPayments) !== JSON.stringify(pendingPayments)){
+          pendingPayments = d.pendingPayments; LS.setL('pendingPayments', pendingPayments); changed = true;
+        }
+      }
     }
-    if(Array.isArray(d.expenses) && JSON.stringify(d.expenses) !== JSON.stringify(expenses)){
-      expenses = d.expenses; LS.setL('expenses', expenses); changed = true;
+
+    if(Array.isArray(d.expenses)){
+      if(isStaffRole){
+        var cloudExpIds = new Set(d.expenses.map(function(e){ return e.id; }));
+        var localOnlyExp2 = expenses.filter(function(e){ return !cloudExpIds.has(e.id); });
+        var merged_exp = d.expenses.concat(localOnlyExp2);
+        merged_exp.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+        if(JSON.stringify(merged_exp) !== JSON.stringify(expenses)){
+          expenses = merged_exp; LS.setL('expenses', expenses); changed = true;
+        }
+      } else {
+        if(JSON.stringify(d.expenses) !== JSON.stringify(expenses)){
+          expenses = d.expenses; LS.setL('expenses', expenses); changed = true;
+        }
+      }
     }
-    if(Array.isArray(d.stockMovLog) && JSON.stringify(d.stockMovLog) !== JSON.stringify(stockMovLog)){
-      stockMovLog = d.stockMovLog; LS.setL('stockMovLog', stockMovLog);
+
+    if(Array.isArray(d.stockMovLog)){
+      if(isStaffRole){
+        var cloudSmlIds = new Set(d.stockMovLog.map(function(m){ return String(m.id); }));
+        var localOnlySml = stockMovLog.filter(function(m){ return !cloudSmlIds.has(String(m.id)); });
+        var merged_sml = d.stockMovLog.concat(localOnlySml);
+        if(JSON.stringify(merged_sml) !== JSON.stringify(stockMovLog)){
+          stockMovLog = merged_sml; LS.setL('stockMovLog', stockMovLog);
+        }
+      } else {
+        if(JSON.stringify(d.stockMovLog) !== JSON.stringify(stockMovLog)){
+          stockMovLog = d.stockMovLog; LS.setL('stockMovLog', stockMovLog);
+        }
+      }
     }
     localStorage.setItem('ac_lastSync', String(cloudTs));
     setSyncDot('online');
