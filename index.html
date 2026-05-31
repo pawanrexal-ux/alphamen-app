@@ -1912,12 +1912,14 @@ async function pullAndMergeStaffData(){
 
       if(newFromStaff.length > 0){
         invoices = invoices.concat(newFromStaff);
-        invoices.sort(function(a,b){ return (b.savedAt||'') > (a.savedAt||'') ? -1 : 1; });
-        LS.setL('invoices', invoices);
+        // FIX: Correct sort — newest first (descending)
+        invoices.sort(function(a,b){ return (b.savedAt||'') > (a.savedAt||'') ? 1 : -1; });
+        // FIX: sync() use karo taaki invoices Firebase pe bhi update ho
+        LS.sync('invoices', invoices);
         merged = true;
         console.log('[StaffSync] Added ' + newFromStaff.length + ' new staff invoices');
       } else if(merged){
-        LS.setL('invoices', invoices);
+        LS.sync('invoices', invoices);
       }
     }
 
@@ -2000,7 +2002,8 @@ async function pullAndMergeStaffData(){
       });
 
       if(stockChanged){
-        LS.setL('stock', stockItems);
+        // FIX: sync() use karo taaki updated stock Firebase pe bhi push ho
+        LS.sync('stock', stockItems);
         merged = true;
       }
     }
@@ -3075,17 +3078,43 @@ function showToast(msg, type){
   clearTimeout(t._to);
   t._to=setTimeout(function(){ t.classList.remove('show'); }, 2800);
 }
-function nowDate(){ return new Date().toISOString().split('T')[0]; }
+function nowDate(){
+  // FIX: toISOString() UTC time deta hai — IST mein raat 12:00-5:30 ke beech
+  // galat (kal ki) date aa jaati thi. Ab local year/month/day use karo.
+  var n = new Date();
+  var y = n.getFullYear();
+  var m = String(n.getMonth()+1).padStart(2,'0');
+  var d = String(n.getDate()).padStart(2,'0');
+  return y+'-'+m+'-'+d;
+}
 var _monthKeyCache = {};
+var _monthKeyCacheMonth = -1; // month rollover detect karne ke liye
 function monthKey(d){
   if(!d) return '';
+  // FIX: Cache month rollover pe clear karo — warna naye month ke invoices purane
+  // month mein count hote rahe jab tak page refresh na ho
+  var curMonth = new Date().getMonth();
+  if(_monthKeyCacheMonth !== curMonth){ _monthKeyCache = {}; _monthKeyCacheMonth = curMonth; }
   if(_monthKeyCache[d] !== undefined) return _monthKeyCache[d];
-  var dt = new Date(d);
+  // FIX: new Date('YYYY-MM-DD') UTC midnight banata hai → IST mein 1 tarikh ka invoice
+  // 'Apr' mein chala jaata tha. Parts split karke local midnight use karo.
+  var parts = d.split('-');
+  var dt = (parts.length === 3)
+    ? new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]))
+    : new Date(d);
   if(isNaN(dt)) { _monthKeyCache[d]=''; return ''; }
   var result = dt.toLocaleString('en-IN', {month:'short', year:'numeric'});
   _monthKeyCache[d] = result;
   return result;
 }
+// FIX UTILITY: Local Date → 'YYYY-MM-DD' (UTC shift nahi hoga)
+function localDateStr(dateObj){
+  var y = dateObj.getFullYear();
+  var m = String(dateObj.getMonth()+1).padStart(2,'0');
+  var d = String(dateObj.getDate()).padStart(2,'0');
+  return y+'-'+m+'-'+d;
+}
+
 function genInvNo(){
   // Invoice number STRICTLY derived from saved invoices array only.
   // This array is Firebase-synced so all devices see the same counter.
@@ -4176,8 +4205,8 @@ function renderPayments(){
     var day = td.getDay(); // 0=Sun
     var mon = new Date(td); mon.setDate(td.getDate() - ((day+6)%7)); // Monday
     var sun = new Date(mon); sun.setDate(mon.getDate() + 6); // Sunday
-    periodFrom = mon.toISOString().slice(0,10);
-    periodTo   = sun.toISOString().slice(0,10);
+    periodFrom = localDateStr(mon);
+    periodTo   = localDateStr(sun);
   }
   function inPeriod(dateStr){ if(!selPeriod) return true; return dateStr >= periodFrom && dateStr <= periodTo; }
 
@@ -6423,7 +6452,8 @@ async function silentPull(){
         invoices.forEach(function(localInv){
           if(!cloudInvIdMap[localInv.id]) mergedInvArr.push(localInv);
         });
-        mergedInvArr.sort(function(a,b){ return (b.savedAt||'') > (a.savedAt||'') ? -1 : 1; });
+        // FIX: Correct sort — newest first (descending)
+        mergedInvArr.sort(function(a,b){ return (b.savedAt||'') > (a.savedAt||'') ? 1 : -1; });
         if(JSON.stringify(mergedInvArr) !== JSON.stringify(invoices)){
           invoices = mergedInvArr; LS.setL('invoices', invoices); changed = true;
         }
@@ -6436,18 +6466,21 @@ async function silentPull(){
 
     if(Array.isArray(d.stock)){
       if(isStaffRole){
-        // Staff: cloud stock accept karo BUT local deductions jo cloud mein nahi hain woh preserve karo
-        // Strategy: cloud stock use karo as base, phir local-only invoice deductions re-apply karo
+        // FIX: Staff stock — cloud base leke POORE mergedInvArr ki deductions apply karo
+        // (sirf local-only nahi, kyunki cloud stock kabhi kabhi out-of-date hota hai)
         var cloudInvIds2 = new Set(d.invoices ? d.invoices.map(function(i){ return i.id; }) : []);
-        var localOnlyForStock = invoices.filter(function(i){ return !cloudInvIds2.has(i.id); });
-        var newStock = JSON.parse(JSON.stringify(d.stock)); // deep copy
-        localOnlyForStock.forEach(function(inv){
+        var newStock = JSON.parse(JSON.stringify(d.stock)); // deep copy of cloud stock
+
+        // Step 1: All invoices (merged — both local-only and cloud-synced) ki deductions
+        // re-apply karo cloud stock par, taaki correct total nikle
+        invoices.forEach(function(inv){
           if(!Array.isArray(inv.items)) return;
           inv.items.forEach(function(item){
             var si = newStock.find(function(s){ return s.name.toLowerCase()===(item.name||'').toLowerCase(); });
             if(si) si.qty = Math.max(0, si.qty - (item.qty||0));
           });
         });
+
         if(JSON.stringify(newStock) !== JSON.stringify(stockItems)){
           stockItems = newStock; LS.setL('stock', stockItems); changed = true;
         }
@@ -6787,8 +6820,8 @@ function renderExpenses(){
       var dow = today.getDay();
       var weekStart = new Date(today); weekStart.setDate(today.getDate() - dow);
       var weekEnd   = new Date(weekStart); weekEnd.setDate(weekStart.getDate()+6);
-      rangeFrom = weekStart.toISOString().slice(0,10);
-      rangeTo   = weekEnd.toISOString().slice(0,10);
+      rangeFrom = localDateStr(weekStart);
+      rangeTo   = localDateStr(weekEnd);
     } else if(period === 'month'){
       // handled by selMonth dropdown
     } else if(period === 'custom'){
@@ -6934,8 +6967,8 @@ function exportExpensesPDF(){
     var dow = today.getDay();
     var ws = new Date(today); ws.setDate(today.getDate()-dow);
     var we = new Date(ws); we.setDate(ws.getDate()+6);
-    rangeFrom = ws.toISOString().slice(0,10);
-    rangeTo   = we.toISOString().slice(0,10);
+    rangeFrom = localDateStr(ws);
+    rangeTo   = localDateStr(we);
   } else if(period==='custom'){
     rangeFrom = document.getElementById('exp-from-date') ? document.getElementById('exp-from-date').value : null;
     rangeTo   = document.getElementById('exp-to-date')   ? document.getElementById('exp-to-date').value   : null;
@@ -7546,8 +7579,8 @@ async function generateWeeklyPDF(anyDateInWeek){
   var day = d.getDay();
   var mon = new Date(d); mon.setDate(d.getDate()-((day+6)%7));
   var sun = new Date(mon); sun.setDate(mon.getDate()+6);
-  var periodFrom = mon.toISOString().slice(0,10);
-  var periodTo   = sun.toISOString().slice(0,10);
+  var periodFrom = localDateStr(mon);
+  var periodTo   = localDateStr(sun);
   function inWeek(ds){ return ds >= periodFrom && ds <= periodTo; }
   var fmt2 = function(dt){ return dt.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); };
   var weekLabel = fmt2(mon) + ' to ' + fmt2(sun);
@@ -7603,7 +7636,7 @@ async function generateWeeklyPDF(anyDateInWeek){
   var dayRows = '';
   var dates = [];
   var cur = new Date(mon);
-  while(cur <= sun){ dates.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1); }
+  while(cur <= sun){ dates.push(localDateStr(cur)); cur.setDate(cur.getDate()+1); }
   dates.forEach(function(ds){
     var di = wkInvs.filter(function(i){ return i.invDate===ds; });
     var dp = wkPurs.filter(function(p){ return p.date===ds; });
@@ -7913,7 +7946,7 @@ function exportPayExcelPeriod(period){
     var day=d.getDay();
     var mon=new Date(d); mon.setDate(d.getDate()-((day+6)%7));
     var sun=new Date(mon); sun.setDate(mon.getDate()+6);
-    from=mon.toISOString().slice(0,10); to=sun.toISOString().slice(0,10);
+    from=localDateStr(mon); to=localDateStr(sun);
   } else if(period==='monthly'){
     from=today.slice(0,7)+'-01';
     var lastD=new Date(parseInt(today.slice(0,4)),parseInt(today.slice(5,7)),0).getDate();
@@ -8536,8 +8569,11 @@ function getPnLDateRange(){
   } else if(type === 'custom'){
     var f = document.getElementById('pl-from') ? document.getElementById('pl-from').value : '';
     var t = document.getElementById('pl-to') ? document.getElementById('pl-to').value : '';
-    from = f ? new Date(f) : new Date(today.getFullYear(), today.getMonth(), 1);
-    to = t ? new Date(t) : today;
+    // FIX: new Date('YYYY-MM-DD') UTC midnight banata hai — local parts se banana
+    from = f ? (function(){ var p=f.split('-'); return new Date(+p[0],+p[1]-1,+p[2]); })()
+             : new Date(today.getFullYear(), today.getMonth(), 1);
+    to   = t ? (function(){ var p=t.split('-'); return new Date(+p[0],+p[1]-1,+p[2]); })()
+             : today;
   } else if(type === '3months'){
     from = new Date(today.getFullYear(), today.getMonth()-2, 1);
     to = new Date(today.getFullYear(), today.getMonth()+1, 0);
@@ -8556,8 +8592,16 @@ function getPnLDateRange(){
 
 function dateInRange(dateStr, from, to){
   if(!dateStr) return false;
-  var d = new Date(dateStr);
-  return d >= from && d <= to;
+  // FIX: new Date('YYYY-MM-DD') UTC midnight parse karta hai, jo IST browser mein
+  // 'to' date se 5.5 ghante aage ho jaata hai. Month ke last day ke invoices
+  // P&L count aur amount mein nahi aate the. Parts split karke local midnight banate hain.
+  var parts = dateStr.split('-');
+  var d = (parts.length === 3)
+    ? new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]))
+    : new Date(dateStr);
+  // 'to' date ko end-of-day tak extend karo (23:59:59) taaki usi din ke invoices include hon
+  var toEOD = new Date(to.getFullYear(), to.getMonth(), to.getDate(), 23, 59, 59);
+  return d >= from && d <= toEOD;
 }
 
 function fmtNum(n){ return '₹' + Number(n||0).toLocaleString('en-IN', {maximumFractionDigits:0}); }
@@ -9123,7 +9167,7 @@ function initKhataEntry(id){
   // Set today date
   if(!id){
     var d = document.getElementById('ke-date');
-    if(d && !d.value) d.value = new Date().toISOString().slice(0,10);
+    if(d && !d.value) d.value = nowDate(); // FIX: nowDate() local date deta hai
     // Reset form
     ['ke-party','ke-amount','ke-ref','ke-remarks'].forEach(function(i){ var el=document.getElementById(i); if(el) el.value=''; });
     var t=document.getElementById('ke-type'); if(t) t.value='debit';
