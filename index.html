@@ -2306,7 +2306,8 @@ async function pushCloud(){
   // Build complete payload — ALL data keys included
   var payload = {
     syncKey: SYNC_KEY,
-    auth: LS.get('auth') || AUTH,  // password sync across devices
+    auth: LS.get('auth') || AUTH,  // admin password sync across devices
+    staffAuth: LS.get('staffAuth') || {user:'staff', pass:'staff@123'}, // staff password sync
     invoices: invoices,
     stock: stockItems,
     stockMovLog: stockMovLog,
@@ -6750,19 +6751,38 @@ async function silentPull(){
   var fbUrl = getFirebaseUrl();
   if(!SYNC_KEY || !fbUrl) return;
   try{
-    // Step 1: Lightweight timestamp check (shallow=true reads only top-level keys)
-    var tsRes = await fetch(getSyncPath().replace('.json','.json?shallow=true'));
-    if(!tsRes.ok) return;
-    var shallow = await tsRes.json();
-    if(!shallow) return;
-    var cloudTs = shallow.ts || 0;
-    var localTs = parseInt(localStorage.getItem('ac_lastSync')||'0');
-    // Only do full read if cloud has newer data
-    if(cloudTs <= localTs) return;
-    var res = await fetch(getSyncPath());
+    // Step 1: Full data fetch (auth sync ke liye timestamp guard bypass kiya gaya)
+    var res = await fetch(getSyncPath() + '?t=' + Date.now()); // cache-bust
     if(!res.ok) return;
     var d = await res.json();
     if(!d || d.syncKey !== SYNC_KEY) return;
+
+    // Auth (password) sync — HAMESHA check karo, timestamp guard se pehle
+    if(d.auth && d.auth.pass){
+      var localAuth = LS.get('auth') || {user:'thejeans', pass:'alpha@123'};
+      if(d.auth.pass !== localAuth.pass || d.auth.user !== localAuth.user){
+        AUTH = d.auth;
+        LS.setL('auth', AUTH);
+        console.log('[silentPull] Password cloud se update hua:', AUTH.user);
+      }
+    }
+    if(d.staffAuth && d.staffAuth.pass){
+      var localStaffAuth = LS.get('staffAuth') || {user:'staff', pass:'staff@123'};
+      if(d.staffAuth.pass !== localStaffAuth.pass || d.staffAuth.user !== localStaffAuth.user){
+        LS.setL('staffAuth', d.staffAuth);
+        console.log('[silentPull] Staff password cloud se update hua');
+      }
+    }
+
+    // Baaki data ke liye timestamp check — unnecessary reads bachao
+    var cloudTs = d.ts || 0;
+    var localTs = parseInt(localStorage.getItem('ac_lastSync')||'0');
+    if(cloudTs <= localTs){
+      // Sirf auth check ke liye aaye the — data same hai, return
+      setSyncDot('online');
+      return;
+    }
+
     var changed = false;
     var isStaffRole = (typeof CURRENT_ROLE !== 'undefined' && CURRENT_ROLE === 'staff');
 
@@ -6907,15 +6927,6 @@ async function silentPull(){
         saveEditLog();
         if(currentPage === 'editlog') renderEditLog();
         changed = true;
-      }
-    }
-    // Auth (password) sync — silentPull mein bhi password update hona chahiye
-    if(d.auth && d.auth.pass){
-      var localAuth = LS.get('auth') || {user:'thejeans', pass:'alpha@123'};
-      if(d.auth.pass !== localAuth.pass || d.auth.user !== localAuth.user){
-        AUTH = d.auth;
-        LS.setL('auth', AUTH);
-        console.log('[silentPull] Auth/password updated from cloud');
       }
     }
     localStorage.setItem('ac_lastSync', String(cloudTs));
