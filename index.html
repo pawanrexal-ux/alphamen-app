@@ -4434,10 +4434,13 @@ function editInv(id){
   var inv = invoices.find(function(i){ return i.id===id; });
   if(!inv){ showToast('Invoice not found'); return; }
   if(CURRENT_ROLE !== 'admin' && inv.invDate !== nowDate()){ showToast('⛔ Sirf aaj ke invoices edit ho sakte hain'); return; }
-  // Snapshot old invoice for audit log
+  // Snapshot old invoice for audit log — BEFORE navTo (navTo calls initInvoice which resets editingInvId)
   window._editInvSnapshot = JSON.parse(JSON.stringify(inv));
+  editingInvId = inv.id; // set BEFORE navTo so initInvoice reset is overridden below
   // Load into form
   navTo('invoice', null);
+  // Re-set editingInvId after initInvoice (which navTo calls) resets it to null
+  editingInvId = inv.id;
   setTimeout(function(){
     document.getElementById('invDate').value = inv.invDate || nowDate();
     document.getElementById('invNo').value = inv.invNo || '';
