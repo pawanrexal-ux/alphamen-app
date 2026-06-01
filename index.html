@@ -6909,6 +6909,15 @@ async function silentPull(){
         changed = true;
       }
     }
+    // Auth (password) sync — silentPull mein bhi password update hona chahiye
+    if(d.auth && d.auth.pass){
+      var localAuth = LS.get('auth') || {user:'thejeans', pass:'alpha@123'};
+      if(d.auth.pass !== localAuth.pass || d.auth.user !== localAuth.user){
+        AUTH = d.auth;
+        LS.setL('auth', AUTH);
+        console.log('[silentPull] Auth/password updated from cloud');
+      }
+    }
     localStorage.setItem('ac_lastSync', String(cloudTs));
     setSyncDot('online');
     lastSync = Date.now();
